@@ -147,8 +147,12 @@ class YouTubeWatcher:
         youtube = self._service()
         channel_ids: List[str] = []
         page_token = None
+        page_count = 0
+
+        print("Loading subscribed channels...")
 
         while True:
+            page_count += 1
             response = (
                 youtube.subscriptions()
                 .list(
@@ -167,15 +171,23 @@ class YouTubeWatcher:
                     channel_ids.append(channel_id)
 
             page_token = response.get("nextPageToken")
+            print(
+                "Fetched subscription page {0}. Total channels so far: {1}".format(
+                    page_count, len(channel_ids)
+                )
+            )
             if not page_token:
                 break
 
+        print("Loaded {0} subscribed channels.".format(len(channel_ids)))
         return channel_ids
 
     def recent_uploads(self) -> List[Dict[str, str]]:
         youtube = self._service()
         channel_ids = self.subscribed_channel_ids()
         uploads_playlists: Dict[str, Dict[str, str]] = {}
+
+        print("Looking up upload playlists for subscribed channels...")
 
         for index in range(0, len(channel_ids), 50):
             batch = channel_ids[index : index + 50]
@@ -196,9 +208,17 @@ class YouTubeWatcher:
                         "channel_id": item.get("id", ""),
                         "channel_title": channel_title,
                     }
+            print(
+                "Prepared upload playlists for {0}/{1} channels.".format(
+                    min(index + len(batch), len(channel_ids)), len(channel_ids)
+                )
+            )
 
         videos: List[Dict[str, str]] = []
-        for playlist_id, metadata in uploads_playlists.items():
+        playlist_items = list(uploads_playlists.items())
+        total_playlists = len(playlist_items)
+        print("Scanning recent uploads from {0} channels...".format(total_playlists))
+        for position, (playlist_id, metadata) in enumerate(playlist_items, start=1):
             response = (
                 youtube.playlistItems()
                 .list(
@@ -224,9 +244,16 @@ class YouTubeWatcher:
                         "url": "https://www.youtube.com/watch?v={0}".format(video_id),
                     }
                 )
+            if position == total_playlists or position % 25 == 0:
+                print(
+                    "Scanned uploads for {0}/{1} channels.".format(
+                        position, total_playlists
+                    )
+                )
 
         video_language_by_id: Dict[str, str] = {}
         video_ids = [video["video_id"] for video in videos]
+        print("Looking up video languages for {0} recent uploads...".format(len(video_ids)))
         for index in range(0, len(video_ids), 50):
             batch = video_ids[index : index + 50]
             if not batch:
@@ -243,6 +270,11 @@ class YouTubeWatcher:
                 )
                 if language_code:
                     video_language_by_id[item.get("id", "")] = language_code
+            print(
+                "Checked languages for {0}/{1} videos.".format(
+                    min(index + len(batch), len(video_ids)), len(video_ids)
+                )
+            )
 
         for video in videos:
             video["original_language"] = video_language_by_id.get(video["video_id"], "")
@@ -389,6 +421,7 @@ class DigestApp:
         return output_path
 
     def check_once(self, include_existing: bool = False) -> None:
+        print("Checking for new videos...")
         videos = self.youtube.recent_uploads()
         unseen = [video for video in videos if not self.state.has_seen(video["video_id"])]
 
