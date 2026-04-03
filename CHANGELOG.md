@@ -14,6 +14,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-04-04 - Refine Prompt Example Template
+- Commit: `unreleased`
+- Reason:
+  The tracked example prompt needed to better reflect the desired structure, tone, and evidence-preservation rules for summaries, while still remaining an example users can copy into their local `prompt.md`.
+- Logic:
+  Replaced the contents of `prompt.example.md` with a more explicit template covering transcript-language output, preservation of numbers and comparisons, structured detailed-summary rules, and the additional title-driven conclusion task.
+
 ## 2026-04-04 - Split Prompt Template Into Example And Local File
 - Commit: `unreleased`
 - Reason:
