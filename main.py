@@ -117,6 +117,7 @@ class YouTubeWatcher:
             str(self.config.credentials_path), SCOPES
         )
         creds = flow.run_local_server(port=0)
+        self.config.token_path.parent.mkdir(parents=True, exist_ok=True)
         self.config.token_path.write_text(creds.to_json())
         print("Authorization complete. Token saved to {0}".format(self.config.token_path))
 
