@@ -423,9 +423,17 @@ class NotificationClient:
 
     def _send_telegram(self, message: str) -> None:
         if not self.telegram_bot_token or not self.telegram_chat_id:
+            print("Telegram delivery skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set.")
             return
 
-        for chunk in self._chunk_telegram_message(message):
+        chunks = self._chunk_telegram_message(message)
+        print(
+            "Sending Telegram message to chat {0} in {1} chunk(s)...".format(
+                self.telegram_chat_id, len(chunks)
+            )
+        )
+
+        for index, chunk in enumerate(chunks, start=1):
             payload = urllib.parse.urlencode(
                 {
                     "chat_id": self.telegram_chat_id,
@@ -444,9 +452,16 @@ class NotificationClient:
             try:
                 with urllib.request.urlopen(request, timeout=20) as response:
                     response.read()
+                print(
+                    "Telegram chunk {0}/{1} sent successfully.".format(
+                        index, len(chunks)
+                    )
+                )
             except Exception as exc:
                 print("Telegram notification failed: {0}".format(exc), file=sys.stderr)
                 return
+
+        print("Telegram delivery complete.")
 
     def _chunk_telegram_message(self, message: str) -> List[str]:
         max_length = 4000
