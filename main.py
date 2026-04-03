@@ -509,21 +509,22 @@ class TranscriptFetcher:
         transcript_module = require_package(
             "youtube_transcript_api", "youtube-transcript-api"
         )
-        self.api = transcript_module.YouTubeTranscriptApi
+        self.api = transcript_module.YouTubeTranscriptApi()
 
     def fetch(
         self, video_id: str, preferred_languages: Optional[List[str]] = None
     ) -> Optional[Dict[str, str]]:
         languages = self._preferred_languages(preferred_languages)
         try:
-            transcript = self.api.get_transcript(video_id, languages=languages)
+            transcript = self.api.fetch(video_id, languages=languages)
         except Exception:
             transcript = self._fetch_any_transcript(video_id)
             if transcript is None:
                 return None
 
+        transcript_items = self._normalize_transcript_items(transcript)
         parts = []
-        for item in transcript:
+        for item in transcript_items:
             text = item.get("text", "").strip()
             if text:
                 parts.append(text)
@@ -532,7 +533,7 @@ class TranscriptFetcher:
             return None
         return {
             "text": " ".join(parts),
-            "language_code": transcript[0].get("language_code", ""),
+            "language_code": self._transcript_language_code(transcript, transcript_items),
         }
 
     def _preferred_languages(
@@ -554,7 +555,7 @@ class TranscriptFetcher:
 
     def _fetch_any_transcript(self, video_id: str) -> Optional[List[Dict[str, str]]]:
         try:
-            transcript_list = self.api.list_transcripts(video_id)
+            transcript_list = self.api.list(video_id)
         except Exception:
             return None
 
@@ -566,6 +567,32 @@ class TranscriptFetcher:
             if fetched:
                 return fetched
         return None
+
+    def _normalize_transcript_items(self, transcript) -> List[Dict[str, str]]:
+        if hasattr(transcript, "to_raw_data"):
+            return transcript.to_raw_data()
+
+        normalized_items: List[Dict[str, str]] = []
+        for item in transcript:
+            if isinstance(item, dict):
+                normalized_items.append(item)
+                continue
+            normalized_items.append(
+                {
+                    "text": getattr(item, "text", ""),
+                    "start": getattr(item, "start", 0),
+                    "duration": getattr(item, "duration", 0),
+                }
+            )
+        return normalized_items
+
+    def _transcript_language_code(self, transcript, transcript_items: List[Dict[str, str]]) -> str:
+        language_code = getattr(transcript, "language_code", "")
+        if language_code:
+            return language_code
+        if transcript_items:
+            return transcript_items[0].get("language_code", "")
+        return ""
 
 
 class GeminiSummarizer:
