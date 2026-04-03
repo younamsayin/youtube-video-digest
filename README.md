@@ -49,7 +49,6 @@ Important variables:
 
 - `GEMINI_API_KEY`: required
 - `GEMINI_MODEL`: defaults to `gemini-2.5-flash`
-- `SUMMARY_LANGUAGE`: output language for summaries
 - `CHECK_INTERVAL_SECONDS`: defaults to `3600`
 - `MAX_VIDEOS_PER_CHANNEL`: how many recent uploads to inspect per subscribed channel
 
@@ -108,5 +107,6 @@ Each summary is saved as a markdown file named with the YouTube video ID.
 ## Notes
 
 - Transcript retrieval depends on whether subtitles are available for the video.
+- The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If no transcript is available, the app falls back to the title and description.
 - Desktop notifications currently use macOS Notification Center.

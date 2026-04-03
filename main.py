@@ -44,7 +44,6 @@ def require_package(name: str, install_hint: str):
 class Config:
     gemini_api_key: str
     gemini_model: str
-    summary_language: str
     check_interval_seconds: int
     max_videos_per_channel: int
     summary_dir: Path
@@ -225,6 +224,28 @@ class YouTubeWatcher:
                     }
                 )
 
+        video_language_by_id: Dict[str, str] = {}
+        video_ids = [video["video_id"] for video in videos]
+        for index in range(0, len(video_ids), 50):
+            batch = video_ids[index : index + 50]
+            if not batch:
+                continue
+            response = (
+                youtube.videos()
+                .list(part="snippet", id=",".join(batch), maxResults=50)
+                .execute()
+            )
+            for item in response.get("items", []):
+                snippet = item.get("snippet", {})
+                language_code = snippet.get("defaultAudioLanguage") or snippet.get(
+                    "defaultLanguage", ""
+                )
+                if language_code:
+                    video_language_by_id[item.get("id", "")] = language_code
+
+        for video in videos:
+            video["original_language"] = video_language_by_id.get(video["video_id"], "")
+
         videos.sort(key=lambda item: item.get("published_at", ""), reverse=True)
         return videos
 
@@ -236,7 +257,7 @@ class TranscriptFetcher:
         )
         self.api = transcript_module.YouTubeTranscriptApi
 
-    def fetch(self, video_id: str) -> Optional[str]:
+    def fetch(self, video_id: str) -> Optional[Dict[str, str]]:
         try:
             transcript = self.api.get_transcript(video_id, languages=["en", "ko"])
         except Exception:
@@ -250,7 +271,10 @@ class TranscriptFetcher:
 
         if not parts:
             return None
-        return " ".join(parts)
+        return {
+            "text": " ".join(parts),
+            "language_code": transcript[0].get("language_code", ""),
+        }
 
 
 class GeminiSummarizer:
@@ -264,17 +288,26 @@ class GeminiSummarizer:
         genai_module = require_package("google.genai", "google-genai")
         self.client = genai_module.Client(api_key=config.gemini_api_key)
         self.model = config.gemini_model
-        self.summary_language = config.summary_language
 
-    def summarize(self, video: Dict[str, str], transcript_text: Optional[str]) -> str:
+    def summarize(
+        self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
+    ) -> str:
         transcript_block = (
-            transcript_text[:18000]
-            if transcript_text
+            transcript_data["text"][:18000]
+            if transcript_data
             else "No transcript was available. Summarize from title and description only."
+        )
+        preferred_language = (
+            video.get("original_language")
+            or (transcript_data or {}).get("language_code", "")
+            or "unknown"
         )
 
         prompt = (
-            "Summarize this YouTube video in {language}.\n"
+            "Summarize this YouTube video in the video's original language.\n"
+            "Prefer the language indicated by the metadata below. "
+            "If the metadata is missing or unclear, infer the language from the transcript, "
+            "title, and description, then write the summary in that language.\n"
             "Return markdown with these sections:\n"
             "## TL;DR\n"
             "## Key Points\n"
@@ -283,13 +316,14 @@ class GeminiSummarizer:
             "Video title: {title}\n"
             "Channel: {channel}\n"
             "URL: {url}\n"
+            "Preferred original language code: {preferred_language}\n"
             "Description:\n{description}\n\n"
             "Transcript or fallback content:\n{transcript}\n"
         ).format(
-            language=self.summary_language,
             title=video["title"],
             channel=video["channel_title"],
             url=video["url"],
+            preferred_language=preferred_language,
             description=video["description"] or "(empty)",
             transcript=transcript_block,
         )
@@ -339,12 +373,14 @@ class DigestApp:
             "# {title}\n\n"
             "- Channel: {channel}\n"
             "- Published: {published_at}\n"
+            "- Original language: {language}\n"
             "- URL: {url}\n\n"
             "{summary}\n"
         ).format(
             title=video["title"],
             channel=video["channel_title"],
             published_at=video["published_at"],
+            language=video.get("original_language", "unknown"),
             url=video["url"],
             summary=summary,
         )
@@ -376,8 +412,8 @@ class DigestApp:
 
         for video in unseen:
             print("Summarizing: {0} ({1})".format(video["title"], video["url"]))
-            transcript_text = self.transcripts.fetch(video["video_id"])
-            summary = self.summarizer.summarize(video, transcript_text)
+            transcript_data = self.transcripts.fetch(video["video_id"])
+            summary = self.summarizer.summarize(video, transcript_data)
             output_path = self._write_summary(video, summary)
             self.state.mark_seen(video["video_id"])
             self.state.save()
@@ -409,7 +445,6 @@ def build_config(project_dir: Path) -> Config:
     return Config(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        summary_language=os.getenv("SUMMARY_LANGUAGE", "English"),
         check_interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "3600")),
         max_videos_per_channel=int(os.getenv("MAX_VIDEOS_PER_CHANNEL", "3")),
         summary_dir=data_dir / "summaries",
