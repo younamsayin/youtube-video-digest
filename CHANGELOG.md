@@ -21,6 +21,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Added a shared `DigestApp` formatter that converts user-facing `published_at` values from YouTube's ISO timestamp into `YYYY-MM-DD HH:MM:SS KST`, then routed summary files, transcript files, Telegram summary messages, and per-video failure alerts through that helper while keeping the raw UTC timestamp untouched for sorting and first-run window logic.
 
+## 2026-04-04 - Strengthen Prompt Example Language Rule
+- Commit: `unreleased`
+- Reason:
+  The tracked prompt example needed a stricter transcript-language instruction so the default template more clearly tells users and the model to keep summaries in the same language as the source transcript.
+- Logic:
+  Replaced the language instruction in `prompt.example.md` with the exact stronger wording requested by the user while preserving the rest of the structured summary template.
+
 ## 2026-04-04 - Refine Prompt Example Template
 - Commit: `unreleased`
 - Reason:
