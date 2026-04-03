@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 from main import (
     Config,
+    DigestApp,
     GeminiSummarizer,
     NotificationClient,
     TranscriptFetcher,
@@ -118,6 +119,8 @@ class TranscriptFetcherTests(unittest.TestCase):
             Config(
                 gemini_api_key="",
                 gemini_model="gemini-2.5-flash",
+                summary_language_mode="transcript",
+                summary_language="",
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,
@@ -156,6 +159,8 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
             config = Config(
                 gemini_api_key="fake-key",
                 gemini_model="gemini-test",
+                summary_language_mode="transcript",
+                summary_language="",
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,
@@ -178,6 +183,7 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
                 transcript_cookie_header="",
             )
             summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+            summarizer.config = config
             summarizer.prompt_template_path = config.prompt_template_path
             summarizer.prompt_template = summarizer._load_prompt_template()
 
@@ -195,6 +201,56 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
         self.assertIn("Title: Video title", prompt)
         self.assertIn("Language: ko", prompt)
         self.assertIn("Transcript body", prompt)
+        self.assertIn("Transcript language code: ko", prompt)
+
+    def test_render_prompt_uses_fixed_summary_language_when_configured(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            prompt_template_path = tmp_path / "prompt.md"
+            prompt_template_path.write_text("Transcript:\n{transcript}\n")
+            config = Config(
+                gemini_api_key="fake-key",
+                gemini_model="gemini-test",
+                summary_language_mode="fixed",
+                summary_language="Korean",
+                telegram_bot_token="",
+                telegram_chat_id="",
+                check_interval_seconds=3600,
+                max_videos_per_channel=3,
+                summary_dir=tmp_path / "summaries",
+                transcript_dir=tmp_path / "transcripts",
+                prompt_dir=tmp_path / "prompts",
+                state_path=tmp_path / "state.json",
+                token_path=tmp_path / "google_token.json",
+                credentials_path=tmp_path / "credentials.json",
+                watched_channels_path=tmp_path / "watched_channels.txt",
+                prompt_template_path=prompt_template_path,
+                failed_video_retry_limit=3,
+                failed_video_retry_cooldown_hours=24,
+                transcript_request_delay_min_seconds=0,
+                transcript_request_delay_max_seconds=0,
+                transcript_rate_limit_pause_min_minutes=30,
+                transcript_rate_limit_pause_max_minutes=60,
+                transcript_user_agent="test-agent",
+                transcript_cookie_header="",
+            )
+            summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+            summarizer.config = config
+            summarizer.prompt_template_path = config.prompt_template_path
+            summarizer.prompt_template = summarizer._load_prompt_template()
+
+            prompt = summarizer.render_prompt(
+                {
+                    "title": "Video title",
+                    "channel_title": "Channel title",
+                    "url": "https://example.com/watch?v=123",
+                    "original_language": "en",
+                    "description": "A sample description",
+                },
+                {"text": "Transcript body", "language_code": "en"},
+            )
+
+        self.assertIn("Write the entire summary in Korean", prompt)
 
     def test_rate_limit_signal_sets_pause_window(self):
         fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
@@ -271,6 +327,35 @@ class NotificationClientTests(unittest.TestCase):
         self.assertIn("<b>Title</b>", formatted)
         self.assertIn("• <b>Important</b> move", formatted)
         self.assertIn("Regular <b>bold</b> text", formatted)
+
+
+class DigestAppFailureNotificationTests(unittest.TestCase):
+    def test_notify_video_failure_sends_context_to_notifier(self):
+        app = DigestApp.__new__(DigestApp)
+
+        class FakeNotifier:
+            def __init__(self):
+                self.calls = []
+
+            def send(self, title, body, full_message=None):
+                self.calls.append(
+                    {"title": title, "body": body, "full_message": full_message}
+                )
+
+        app.notifier = FakeNotifier()
+        video = {
+            "title": "Example video",
+            "channel_title": "Example channel",
+            "published_at": "2026-04-04T00:00:00Z",
+            "url": "https://www.youtube.com/watch?v=abc123",
+        }
+
+        app._notify_video_failure(video, "Transcript fetch", "No transcript found")
+
+        self.assertEqual(app.notifier.calls[0]["title"], "YouTube video failed")
+        self.assertIn("Transcript fetch", app.notifier.calls[0]["body"])
+        self.assertIn("Example video", app.notifier.calls[0]["full_message"])
+        self.assertIn("No transcript found", app.notifier.calls[0]["full_message"])
 
 
 if __name__ == "__main__":

@@ -21,6 +21,20 @@ This file records project changes with enough detail to answer:
 - Logic:
   Replaced the contents of `prompt.example.md` with a more explicit template covering transcript-language output, preservation of numbers and comparisons, structured detailed-summary rules, and the additional title-driven conclusion task.
 
+## 2026-04-04 - Implement Summary Language Mode
+- Commit: `unreleased`
+- Reason:
+  `SUMMARY_LANGUAGE` existed in local configuration but had no effect, which made output-language debugging confusing.
+- Logic:
+  Added `SUMMARY_LANGUAGE_MODE` with `transcript` as the default and `fixed` as an explicit forced-language mode, injected that behavior into prompt rendering, and documented the setting in `.env.example` and `README.md`.
+
+## 2026-04-04 - Add Per-Video Failure Telegram Alerts
+- Commit: `unreleased`
+- Reason:
+  Per-video transcript and summary failures were only visible in local logs, which made it easy to miss broken videos when the daemon was running unattended.
+- Logic:
+  Added a reusable per-video failure notification helper and used it for transcript-fetch failures and summary-generation failures in both normal runs and test runs. The alerts include the stage, title, channel, URL, and failure reason, while still avoiding recursive alerting for Telegram delivery failures themselves.
+
 ## 2026-04-04 - Split Prompt Template Into Example And Local File
 - Commit: `unreleased`
 - Reason:

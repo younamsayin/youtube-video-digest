@@ -54,6 +54,8 @@ class StateStoreTests(unittest.TestCase):
             config = Config(
                 gemini_api_key="",
                 gemini_model="gemini-2.5-flash",
+                summary_language_mode="transcript",
+                summary_language="",
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,

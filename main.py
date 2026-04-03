@@ -65,6 +65,8 @@ def require_package(name: str, install_hint: str):
 class Config:
     gemini_api_key: str
     gemini_model: str
+    summary_language_mode: str
+    summary_language: str
     telegram_bot_token: str
     telegram_chat_id: str
     check_interval_seconds: int
@@ -779,13 +781,16 @@ class GeminiSummarizer:
             or "unknown"
         )
 
-        return self.prompt_template.format(
+        prompt_body = self.prompt_template.format(
             title=video["title"],
             channel=video["channel_title"],
             url=video["url"],
             preferred_language=preferred_language,
             description=video["description"] or "(empty)",
             transcript=transcript_block,
+        )
+        return "{0}\n\n{1}".format(
+            self._summary_language_instruction(preferred_language), prompt_body
         )
 
     def _load_prompt_template(self) -> str:
@@ -811,6 +816,32 @@ class GeminiSummarizer:
         if text_parts:
             return "".join(text_parts).strip()
         return (getattr(response, "text", "") or "").strip()
+
+    def _summary_language_instruction(self, transcript_language: str) -> str:
+        mode = (self.config.summary_language_mode or "transcript").strip().lower()
+        if mode not in {"transcript", "fixed"}:
+            raise SystemExit(
+                "Invalid SUMMARY_LANGUAGE_MODE '{0}'. Use 'transcript' or 'fixed'.".format(
+                    self.config.summary_language_mode
+                )
+            )
+
+        if mode == "fixed":
+            target_language = (self.config.summary_language or "").strip()
+            if not target_language:
+                raise SystemExit(
+                    "SUMMARY_LANGUAGE_MODE=fixed requires SUMMARY_LANGUAGE to be set."
+                )
+            return (
+                "[Output Language]\n"
+                "Write the entire summary in {0}. Do not switch to another language."
+            ).format(target_language)
+
+        return (
+            "[Output Language]\n"
+            "Write the entire summary in the same language as the transcript. "
+            "Transcript language code: {0}. Do not translate the summary into another language."
+        ).format(transcript_language or "unknown")
 
 
 class NotificationClient:
@@ -1102,6 +1133,32 @@ class DigestApp:
             summary=summary,
         )
 
+    def _video_failure_message(self, video: Dict[str, str], stage: str, reason: str) -> str:
+        return (
+            "# YouTube video processing failed\n\n"
+            "- Stage: {stage}\n"
+            "- Title: {title}\n"
+            "- Channel: {channel}\n"
+            "- Published: {published_at}\n"
+            "- URL: {url}\n\n"
+            "Reason:\n"
+            "{reason}"
+        ).format(
+            stage=stage,
+            title=video["title"],
+            channel=video["channel_title"],
+            published_at=video["published_at"],
+            url=video["url"],
+            reason=reason,
+        )
+
+    def _notify_video_failure(self, video: Dict[str, str], stage: str, reason: str) -> None:
+        self.notifier.send(
+            "YouTube video failed",
+            "{0}: {1}".format(stage, video["title"]),
+            full_message=self._video_failure_message(video, stage, reason),
+        )
+
     def _is_within_first_run_window(self, video: Dict[str, str]) -> bool:
         published_at = video.get("published_at", "")
         if not published_at:
@@ -1223,12 +1280,24 @@ class DigestApp:
                     "Skipping video because transcript fetch failed: {0}\n"
                     "Reason: {1}".format(video["title"], failure_reason)
                 )
+                self._notify_video_failure(video, "Transcript fetch", failure_reason)
                 self.state.mark_failed(video["video_id"], failure_reason)
                 self.state.save()
                 continue
             transcript_path = self._write_transcript(video, transcript_data)
             print("Transcript saved to {0}".format(transcript_path))
-            summary_result = self.summarizer.summarize(video, transcript_data)
+            try:
+                summary_result = self.summarizer.summarize(video, transcript_data)
+            except Exception as exc:
+                failure_reason = "Summary generation failed: {0}".format(exc)
+                print(
+                    "Skipping video because summary generation failed: {0}\n"
+                    "Reason: {1}".format(video["title"], failure_reason)
+                )
+                self._notify_video_failure(video, "Summary generation", failure_reason)
+                self.state.mark_failed(video["video_id"], failure_reason)
+                self.state.save()
+                continue
             prompt_path = self._write_prompt(video, summary_result["prompt"])
             print("Prompt saved to {0}".format(prompt_path))
             summary = summary_result["summary"]
@@ -1280,10 +1349,20 @@ class DigestApp:
                 "Skipping test run because transcript fetch failed for this video.\n"
                 "Reason: {0}".format(failure_reason)
             )
+            self._notify_video_failure(video, "Transcript fetch", failure_reason)
             return
         transcript_path = self._write_transcript(video, transcript_data, test_mode=True)
         print("Test transcript saved to {0}".format(transcript_path))
-        summary_result = self.summarizer.summarize(video, transcript_data)
+        try:
+            summary_result = self.summarizer.summarize(video, transcript_data)
+        except Exception as exc:
+            failure_reason = "Summary generation failed: {0}".format(exc)
+            print(
+                "Skipping test run because summary generation failed for this video.\n"
+                "Reason: {0}".format(failure_reason)
+            )
+            self._notify_video_failure(video, "Summary generation", failure_reason)
+            return
         prompt_path = self._write_prompt(video, summary_result["prompt"], test_mode=True)
         print("Test prompt saved to {0}".format(prompt_path))
         summary = summary_result["summary"]
@@ -1336,6 +1415,8 @@ def build_config(project_dir: Path) -> Config:
     return Config(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        summary_language_mode=os.getenv("SUMMARY_LANGUAGE_MODE", "transcript"),
+        summary_language=os.getenv("SUMMARY_LANGUAGE", ""),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         check_interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "3600")),

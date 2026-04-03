@@ -50,6 +50,8 @@ Important variables:
 
 - `GEMINI_API_KEY`: required
 - `GEMINI_MODEL`: defaults to `gemini-2.5-flash`
+- `SUMMARY_LANGUAGE_MODE`: defaults to `transcript`; use `fixed` to force one output language
+- `SUMMARY_LANGUAGE`: only used when `SUMMARY_LANGUAGE_MODE=fixed`
 - `TELEGRAM_BOT_TOKEN`: optional, enables Telegram delivery
 - `TELEGRAM_CHAT_ID`: optional, the target Telegram user/chat/channel id
 - `CHECK_INTERVAL_SECONDS`: defaults to `3600`
@@ -75,6 +77,13 @@ cp prompt.example.md prompt.md
 ```
 
 Then edit `prompt.md` with the summary instructions you want to use.
+
+By default, the app tells the model to follow the transcript language. If you want to force one language for every summary, use:
+
+```bash
+SUMMARY_LANGUAGE_MODE=fixed
+SUMMARY_LANGUAGE=Korean
+```
 
 ### 5. Choose which channels to watch
 
@@ -175,6 +184,7 @@ Each prompt is saved as a markdown file named with the YouTube video ID. Test pr
 - The fully rendered prompt used for each summary is saved to `data/prompts/`.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If transcript fetching fails, the app tracks the video separately from successful summaries and retries it later based on the configured retry limit and cooldown.
+- Transcript-fetch failures and summary-generation failures also send per-video Telegram alerts when Telegram delivery is configured.
 - Transcript fetching is intentionally serialized, uses randomized request delays, reuses cached transcript files, and pauses future transcript requests for 30-60 minutes when YouTube starts signaling blocking or rate limiting.
 - Desktop notifications currently use macOS Notification Center.
 - If both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, completed summaries are also sent to Telegram.
