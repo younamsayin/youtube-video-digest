@@ -252,6 +252,59 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
 
         self.assertIn("Write the entire summary in Korean", prompt)
 
+    def test_init_stores_config_for_runtime_language_mode(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            prompt_template_path = tmp_path / "prompt.md"
+            prompt_template_path.write_text("Transcript:\n{transcript}\n")
+            config = Config(
+                gemini_api_key="fake-key",
+                gemini_model="gemini-test",
+                summary_language_mode="transcript",
+                summary_language="",
+                telegram_bot_token="",
+                telegram_chat_id="",
+                check_interval_seconds=3600,
+                max_videos_per_channel=3,
+                summary_dir=tmp_path / "summaries",
+                transcript_dir=tmp_path / "transcripts",
+                prompt_dir=tmp_path / "prompts",
+                state_path=tmp_path / "state.json",
+                token_path=tmp_path / "google_token.json",
+                credentials_path=tmp_path / "credentials.json",
+                watched_channels_path=tmp_path / "watched_channels.txt",
+                prompt_template_path=prompt_template_path,
+                failed_video_retry_limit=3,
+                failed_video_retry_cooldown_hours=24,
+                transcript_request_delay_min_seconds=0,
+                transcript_request_delay_max_seconds=0,
+                transcript_rate_limit_pause_min_minutes=30,
+                transcript_rate_limit_pause_max_minutes=60,
+                transcript_user_agent="test-agent",
+                transcript_cookie_header="",
+            )
+
+            original_require_package = __import__("main").require_package
+
+            class FakeClient:
+                def __init__(self, api_key):
+                    self.api_key = api_key
+
+            class FakeGenaiModule:
+                Client = FakeClient
+
+            try:
+                import main
+
+                main.require_package = lambda name, hint: FakeGenaiModule
+                summarizer = GeminiSummarizer(config)
+            finally:
+                import main
+
+                main.require_package = original_require_package
+
+        self.assertIs(summarizer.config, config)
+
     def test_rate_limit_signal_sets_pause_window(self):
         fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
         fetcher.pause_until = None

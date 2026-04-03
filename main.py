@@ -747,6 +747,7 @@ class GeminiSummarizer:
                     Path(__file__).resolve().parent / ".env"
                 )
             )
+        self.config = config
         genai_module = require_package("google.genai", "google-genai")
         self.client = genai_module.Client(api_key=config.gemini_api_key)
         self.model = config.gemini_model
