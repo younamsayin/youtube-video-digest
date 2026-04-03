@@ -2,16 +2,18 @@
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
+FIRST_RUN_LOOKBACK_DAYS = 7
 
 
 def load_dotenv(project_dir: Path) -> None:
@@ -185,6 +187,10 @@ class YouTubeWatcher:
     def recent_uploads(self) -> List[Dict[str, str]]:
         youtube = self._service()
         channel_ids = self.subscribed_channel_ids()
+        return self.recent_uploads_for_channel_ids(channel_ids)
+
+    def recent_uploads_for_channel_ids(self, channel_ids: List[str]) -> List[Dict[str, str]]:
+        youtube = self._service()
         uploads_playlists: Dict[str, Dict[str, str]] = {}
 
         print("Looking up upload playlists for subscribed channels...")
@@ -281,6 +287,18 @@ class YouTubeWatcher:
 
         videos.sort(key=lambda item: item.get("published_at", ""), reverse=True)
         return videos
+
+    def random_channel_recent_video(self) -> Dict[str, str]:
+        channel_ids = self.subscribed_channel_ids()
+        if not channel_ids:
+            raise SystemExit("No subscribed channels were found for this account.")
+
+        random_channel_id = random.choice(channel_ids)
+        print("Selected a random subscribed channel for test mode.")
+        videos = self.recent_uploads_for_channel_ids([random_channel_id])
+        if not videos:
+            raise SystemExit("The selected channel does not have recent uploads to summarize.")
+        return videos[0]
 
 
 class TranscriptFetcher:
@@ -400,8 +418,15 @@ class DigestApp:
     def _summary_path(self, video_id: str) -> Path:
         return self.config.summary_dir / "{0}.md".format(video_id)
 
-    def _write_summary(self, video: Dict[str, str], summary: str) -> Path:
-        output_path = self._summary_path(video["video_id"])
+    def _test_summary_path(self, video_id: str) -> Path:
+        return self.config.summary_dir / "{0}-test.md".format(video_id)
+
+    def _write_summary(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> Path:
+        output_path = (
+            self._test_summary_path(video["video_id"])
+            if test_mode
+            else self._summary_path(video["video_id"])
+        )
         content = (
             "# {title}\n\n"
             "- Channel: {channel}\n"
@@ -420,6 +445,17 @@ class DigestApp:
         output_path.write_text(content)
         return output_path
 
+    def _is_within_first_run_window(self, video: Dict[str, str]) -> bool:
+        published_at = video.get("published_at", "")
+        if not published_at:
+            return False
+        try:
+            published_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        cutoff = datetime.now(timezone.utc) - timedelta(days=FIRST_RUN_LOOKBACK_DAYS)
+        return published_dt >= cutoff
+
     def check_once(self, include_existing: bool = False) -> None:
         print("Checking for new videos...")
         videos = self.youtube.recent_uploads()
@@ -430,12 +466,29 @@ class DigestApp:
             self.state.set_first_run_completed()
             self.state.touch_last_checked()
             self.state.save()
+            recent_count = sum(1 for video in videos if self._is_within_first_run_window(video))
             print(
-                "First run complete. Marked {0} current videos as seen without summarizing.".format(
-                    len(videos)
+                "First run complete. Marked {0} current videos as seen without summarizing. "
+                "Only videos from the last {1} days would be considered on a first-run summary pass "
+                "({2} recent videos found).".format(
+                    len(videos), FIRST_RUN_LOOKBACK_DAYS, recent_count
                 )
             )
             return
+
+        if not self.state.data["first_run_completed"] and include_existing:
+            recent_unseen = [video for video in unseen if self._is_within_first_run_window(video)]
+            older_unseen = [video for video in unseen if not self._is_within_first_run_window(video)]
+            if older_unseen:
+                self.state.mark_many_seen([video["video_id"] for video in older_unseen])
+                self.state.save()
+            unseen = recent_unseen
+            print(
+                "First run with backlog enabled: considering only videos from the last {0} days "
+                "({1} recent, {2} older videos skipped).".format(
+                    FIRST_RUN_LOOKBACK_DAYS, len(recent_unseen), len(older_unseen)
+                )
+            )
 
         if not unseen:
             self.state.set_first_run_completed()
@@ -460,6 +513,23 @@ class DigestApp:
         self.state.touch_last_checked()
         self.state.save()
         print("Processed {0} new videos.".format(len(unseen)))
+
+    def test_run(self) -> None:
+        print("Running test mode with one random subscribed channel...")
+        video = self.youtube.random_channel_recent_video()
+        print(
+            "Summarizing test video: {0} from {1}".format(
+                video["title"], video["channel_title"]
+            )
+        )
+        transcript_data = self.transcripts.fetch(video["video_id"])
+        summary = self.summarizer.summarize(video, transcript_data)
+        output_path = self._write_summary(video, summary, test_mode=True)
+        self.notifier.send(
+            "YouTube test summary ready",
+            "{0} - saved to {1}".format(video["title"], output_path.name),
+        )
+        print("Test summary saved to {0}".format(output_path))
 
     def daemon(self) -> None:
         while True:
@@ -503,6 +573,11 @@ def parse_args() -> argparse.Namespace:
         help="On the first run, summarize the current backlog instead of marking it as seen.",
     )
 
+    subparsers.add_parser(
+        "test-run",
+        help="Pick one random subscribed channel and summarize one recent video without updating seen state.",
+    )
+
     subparsers.add_parser("daemon", help="Run forever and check every configured interval.")
     return parser.parse_args()
 
@@ -519,6 +594,8 @@ def main() -> None:
     app = DigestApp(config)
     if args.command == "run-once":
         app.check_once(include_existing=args.include_existing)
+    elif args.command == "test-run":
+        app.test_run()
     elif args.command == "daemon":
         app.daemon()
 

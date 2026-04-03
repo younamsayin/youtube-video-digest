@@ -79,6 +79,13 @@ cd /Users/samuelnam/Desktop/code/youtube-video-digest
 python3 main.py run-once --include-existing
 ```
 
+Run a test summary on one random subscribed channel:
+
+```bash
+cd /Users/samuelnam/Desktop/code/youtube-video-digest
+python3 main.py test-run
+```
+
 Run forever and check every hour:
 
 ```bash
@@ -89,6 +96,8 @@ python3 main.py daemon
 ## First-run behavior
 
 On the first normal run, the program marks the current feed as already seen and only summarizes videos uploaded after that point. This avoids a flood of old summaries.
+
+If you use `--include-existing` on the very first run, the app only considers videos uploaded in the last 7 days and skips older backlog items.
 
 If you do want the existing backlog, use:
 
@@ -103,6 +112,8 @@ Summaries are written to:
 `/Users/samuelnam/Desktop/code/youtube-video-digest/data/summaries/`
 
 Each summary is saved as a markdown file named with the YouTube video ID.
+
+Test summaries are saved with a `-test.md` suffix and do not update the seen-video state.
 
 ## Notes
 
