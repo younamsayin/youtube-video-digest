@@ -1,3 +1,4 @@
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -82,6 +83,33 @@ class StateStoreTests(unittest.TestCase):
             )
 
         self.assertRegex(formatted, r"2026-04-04 \d{2}:\d{2}:\d{2}")
+
+    def test_load_dotenv_preserves_unmatched_quotes(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            env_path = tmp_path / ".env"
+            env_path.write_text("TEST_VALUE=abc'\nQUOTED=\"value\"\n")
+
+            original_test_value = os.environ.get("TEST_VALUE")
+            original_quoted = os.environ.get("QUOTED")
+            try:
+                os.environ.pop("TEST_VALUE", None)
+                os.environ.pop("QUOTED", None)
+                from main import load_dotenv
+
+                load_dotenv(tmp_path)
+
+                self.assertEqual(os.environ["TEST_VALUE"], "abc'")
+                self.assertEqual(os.environ["QUOTED"], "value")
+            finally:
+                if original_test_value is None:
+                    os.environ.pop("TEST_VALUE", None)
+                else:
+                    os.environ["TEST_VALUE"] = original_test_value
+                if original_quoted is None:
+                    os.environ.pop("QUOTED", None)
+                else:
+                    os.environ["QUOTED"] = original_quoted
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 FIRST_RUN_LOOKBACK_DAYS = 7
 FAILED_VIDEO_RETRY_LIMIT = 3
 FAILED_VIDEO_RETRY_COOLDOWN_HOURS = 24
+MAX_TRANSCRIPT_CHARS = 18000
 TRANSCRIPT_REQUEST_DELAY_MIN_SECONDS = 2.0
 TRANSCRIPT_REQUEST_DELAY_MAX_SECONDS = 6.0
 TRANSCRIPT_RATE_LIMIT_PAUSE_MIN_MINUTES = 30
@@ -28,6 +29,7 @@ DEFAULT_TRANSCRIPT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
+CHANNEL_ID_PATTERN = re.compile(r"^UC[a-zA-Z0-9_-]{22}$")
 
 
 def load_dotenv(project_dir: Path) -> None:
@@ -41,7 +43,9 @@ def load_dotenv(project_dir: Path) -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
         os.environ.setdefault(key, value)
 
 
@@ -243,12 +247,15 @@ class YouTubeWatcher:
         return google_discovery.build("youtube", "v3", credentials=creds)
 
     def _execute_request(self, request, label: str):
+        google_errors = require_package(
+            "googleapiclient.errors", "google-api-python-client"
+        )
         max_attempts = 5
         for attempt in range(1, max_attempts + 1):
             try:
                 return request.execute()
-            except Exception as exc:
-                status_code = getattr(getattr(exc, "resp", None), "status", None)
+            except google_errors.HttpError as exc:
+                status_code = getattr(exc.resp, "status", None)
                 details = str(exc)
                 is_retryable = (
                     status_code in self.RETRYABLE_STATUS_CODES
@@ -266,48 +273,6 @@ class YouTubeWatcher:
                     )
                 )
                 time.sleep(delay_seconds)
-
-    def subscribed_channel_ids(self) -> List[str]:
-        youtube = self._service()
-        channel_ids: List[str] = []
-        page_token = None
-        page_count = 0
-
-        print("Loading subscribed channels...")
-
-        while True:
-            page_count += 1
-            response = (
-                youtube.subscriptions()
-                .list(
-                    part="snippet",
-                    mine=True,
-                    maxResults=50,
-                    pageToken=page_token,
-                )
-            )
-            response = self._execute_request(
-                response,
-                "Loading subscription page {0}".format(page_count),
-            )
-
-            for item in response.get("items", []):
-                resource = item.get("snippet", {}).get("resourceId", {})
-                channel_id = resource.get("channelId")
-                if channel_id:
-                    channel_ids.append(channel_id)
-
-            page_token = response.get("nextPageToken")
-            print(
-                "Fetched subscription page {0}. Total channels so far: {1}".format(
-                    page_count, len(channel_ids)
-                )
-            )
-            if not page_token:
-                break
-
-        print("Loaded {0} subscribed channels.".format(len(channel_ids)))
-        return channel_ids
 
     def recent_uploads(self) -> List[Dict[str, str]]:
         channel_ids = self.configured_channel_ids()
@@ -426,7 +391,7 @@ class YouTubeWatcher:
         if candidate.startswith("@"):
             return {"kind": "handle", "value": candidate}
 
-        if candidate.startswith("UC") and len(candidate) >= 24:
+        if CHANNEL_ID_PATTERN.fullmatch(candidate):
             return {"kind": "channel_id", "value": candidate}
 
         parsed = urllib.parse.urlparse(candidate)
@@ -801,8 +766,9 @@ class GeminiSummarizer:
     def render_prompt(
         self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
     ) -> str:
+        # Keep prompt size bounded so long transcripts do not overwhelm the model.
         transcript_block = (
-            transcript_data["text"][:18000]
+            transcript_data["text"][:MAX_TRANSCRIPT_CHARS]
             if transcript_data
             else "No transcript was available. Summarize from title and description only."
         )
@@ -836,8 +802,8 @@ class NotificationClient:
 
     def send(self, title: str, body: str, full_message: Optional[str] = None) -> None:
         if sys.platform == "darwin":
-            safe_title = title.replace('"', '\\"')
-            safe_body = body.replace('"', '\\"')
+            safe_title = self._escape_osascript_string(title)
+            safe_body = self._escape_osascript_string(body)
             subprocess.run(
                 [
                     "osascript",
@@ -891,7 +857,12 @@ class NotificationClient:
                     )
                 )
             except Exception as exc:
-                print("Telegram notification failed: {0}".format(exc), file=sys.stderr)
+                print(
+                    "Telegram notification failed: {0}".format(
+                        self._redact_telegram_error(str(exc))
+                    ),
+                    file=sys.stderr,
+                )
                 return
 
         print("Telegram delivery complete.")
@@ -912,6 +883,20 @@ class NotificationClient:
         if remaining:
             chunks.append(remaining)
         return chunks
+
+    def _escape_osascript_string(self, value: str) -> str:
+        return (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("`", "\\`")
+        )
+
+    def _redact_telegram_error(self, message: str) -> str:
+        if not self.telegram_bot_token:
+            return message
+        return message.replace(self.telegram_bot_token, "[REDACTED_TELEGRAM_BOT_TOKEN]")
 
 
 class DigestApp:
@@ -1118,6 +1103,7 @@ class DigestApp:
         print("Checking for new videos...")
         videos = self.youtube.recent_uploads()
         unseen = self._eligible_videos(videos)
+        processed_count = 0
 
         if not self.state.data["first_run_completed"] and not include_existing:
             self.state.mark_many_seen([video["video_id"] for video in videos])
@@ -1196,6 +1182,7 @@ class DigestApp:
             output_path = self._write_summary(video, summary)
             self.state.mark_seen(video["video_id"])
             self.state.save()
+            processed_count += 1
             self.notifier.send(
                 "YouTube summary ready",
                 "{0} - saved to {1}".format(video["title"], output_path.name),
@@ -1205,7 +1192,7 @@ class DigestApp:
         self.state.set_first_run_completed()
         self.state.touch_last_checked()
         self.state.save()
-        print("Processed {0} new videos.".format(len(unseen)))
+        print("Processed {0} new videos.".format(processed_count))
 
     def test_run(self) -> None:
         print("Running test mode with one random watched channel...")
@@ -1266,6 +1253,8 @@ class DigestApp:
             try:
                 self.check_once()
             except KeyboardInterrupt:
+                raise
+            except SystemExit:
                 raise
             except Exception as exc:
                 print("Run failed: {0}".format(exc), file=sys.stderr)

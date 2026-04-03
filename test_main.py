@@ -2,7 +2,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from main import Config, GeminiSummarizer, TranscriptFetcher
+from main import (
+    Config,
+    GeminiSummarizer,
+    NotificationClient,
+    TranscriptFetcher,
+    YouTubeWatcher,
+)
 
 
 class FakeFetchedTranscript:
@@ -107,6 +113,37 @@ class TranscriptFetcherTests(unittest.TestCase):
         self.assertIn("primary path failed", fetcher.last_error)
         self.assertIn("listing failed", fetcher.last_error)
 
+    def test_parse_channel_reference_does_not_treat_invalid_uc_string_as_channel_id(self):
+        watcher = YouTubeWatcher(
+            Config(
+                gemini_api_key="",
+                gemini_model="gemini-2.5-flash",
+                telegram_bot_token="",
+                telegram_chat_id="",
+                check_interval_seconds=3600,
+                max_videos_per_channel=3,
+                summary_dir=Path(".") / "summaries",
+                transcript_dir=Path(".") / "transcripts",
+                prompt_dir=Path(".") / "prompts",
+                state_path=Path(".") / "state.json",
+                token_path=Path(".") / "google_token.json",
+                credentials_path=Path(".") / "credentials.json",
+                watched_channels_path=Path(".") / "watched_channels.txt",
+                prompt_template_path=Path(".") / "prompt.md",
+                failed_video_retry_limit=3,
+                failed_video_retry_cooldown_hours=24,
+                transcript_request_delay_min_seconds=0,
+                transcript_request_delay_max_seconds=0,
+                transcript_rate_limit_pause_min_minutes=30,
+                transcript_rate_limit_pause_max_minutes=60,
+                transcript_user_agent="test-agent",
+                transcript_cookie_header="",
+            )
+        )
+
+        with self.assertRaises(SystemExit):
+            watcher._parse_channel_reference("UCnot/a/channel/id")
+
 
 class GeminiSummarizerPromptTests(unittest.TestCase):
     def test_render_prompt_uses_external_template(self):
@@ -171,6 +208,25 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
         fetcher._maybe_pause_on_rate_limit(RequestBlocked("blocked by youtube"))
 
         self.assertIsNotNone(fetcher.pause_until)
+
+
+class NotificationClientTests(unittest.TestCase):
+    def test_escape_osascript_string_handles_newlines_and_backticks(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+        escaped = notifier._escape_osascript_string('hello\n"world"`test`')
+
+        self.assertEqual(escaped, 'hello\\n\\"world\\"\\`test\\`')
+
+    def test_redact_telegram_error_hides_bot_token(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+        notifier.telegram_bot_token = "12345:secret-token"
+
+        redacted = notifier._redact_telegram_error(
+            "POST https://api.telegram.org/bot12345:secret-token/sendMessage failed"
+        )
+
+        self.assertNotIn("12345:secret-token", redacted)
+        self.assertIn("[REDACTED_TELEGRAM_BOT_TOKEN]", redacted)
 
 
 if __name__ == "__main__":
