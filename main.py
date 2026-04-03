@@ -1111,6 +1111,9 @@ class DigestApp:
         )
         return True
 
+    def _format_local_timestamp(self, dt: datetime) -> str:
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
     def check_once(self, include_existing: bool = False) -> None:
         print("Checking for new videos...")
         videos = self.youtube.recent_uploads()
@@ -1254,6 +1257,12 @@ class DigestApp:
 
     def daemon(self) -> None:
         while True:
+            started_at = datetime.now(timezone.utc)
+            print(
+                "[Daemon] Check started at {0}".format(
+                    self._format_local_timestamp(started_at)
+                )
+            )
             try:
                 self.check_once()
             except KeyboardInterrupt:
@@ -1261,6 +1270,21 @@ class DigestApp:
             except Exception as exc:
                 print("Run failed: {0}".format(exc), file=sys.stderr)
                 self.notifier.send("YouTube digest failed", str(exc))
+            finished_at = datetime.now(timezone.utc)
+            next_run_at = finished_at + timedelta(
+                seconds=self.config.check_interval_seconds
+            )
+            print(
+                "[Daemon] Check finished at {0}".format(
+                    self._format_local_timestamp(finished_at)
+                )
+            )
+            print(
+                "[Daemon] Sleeping for {0} seconds. Next check at {1}".format(
+                    self.config.check_interval_seconds,
+                    self._format_local_timestamp(next_run_at),
+                )
+            )
             time.sleep(self.config.check_interval_seconds)
 
 
