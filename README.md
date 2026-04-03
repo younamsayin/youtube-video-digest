@@ -54,6 +54,8 @@ Important variables:
 - `TELEGRAM_CHAT_ID`: optional, the target Telegram user/chat/channel id
 - `CHECK_INTERVAL_SECONDS`: defaults to `3600`
 - `MAX_VIDEOS_PER_CHANNEL`: how many recent uploads to inspect per watched channel
+- `FAILED_VIDEO_RETRY_LIMIT`: defaults to `3`
+- `FAILED_VIDEO_RETRY_COOLDOWN_HOURS`: defaults to `24`
 
 ### 4. Choose which channels to watch
 
@@ -145,6 +147,6 @@ Each transcript is saved as a text file named with the YouTube video ID. Test tr
 
 - Transcript retrieval depends on whether subtitles are available for the video.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
-- If no transcript is available, the app skips transcript saving, summary generation, and Telegram delivery for that video.
+- If transcript fetching fails, the app tracks the video separately from successful summaries and retries it later based on the configured retry limit and cooldown.
 - Desktop notifications currently use macOS Notification Center.
 - If both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, completed summaries are also sent to Telegram.

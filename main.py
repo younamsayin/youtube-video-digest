@@ -17,6 +17,8 @@ from typing import Dict, List, Optional
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 FIRST_RUN_LOOKBACK_DAYS = 7
+FAILED_VIDEO_RETRY_LIMIT = 3
+FAILED_VIDEO_RETRY_COOLDOWN_HOURS = 24
 
 
 def load_dotenv(project_dir: Path) -> None:
@@ -59,6 +61,8 @@ class Config:
     token_path: Path
     credentials_path: Path
     watched_channels_path: Path
+    failed_video_retry_limit: int
+    failed_video_retry_cooldown_hours: int
 
 
 class StateStore:
@@ -70,9 +74,14 @@ class StateStore:
         else:
             self.data = {
                 "seen_video_ids": [],
+                "failed_videos": {},
                 "first_run_completed": False,
                 "last_checked_at": None,
             }
+        self.data.setdefault("seen_video_ids", [])
+        self.data.setdefault("failed_videos", {})
+        self.data.setdefault("first_run_completed", False)
+        self.data.setdefault("last_checked_at", None)
 
     def has_seen(self, video_id: str) -> bool:
         return video_id in self.data["seen_video_ids"]
@@ -80,10 +89,51 @@ class StateStore:
     def mark_seen(self, video_id: str) -> None:
         if not self.has_seen(video_id):
             self.data["seen_video_ids"].append(video_id)
+        self.clear_failed(video_id)
 
     def mark_many_seen(self, video_ids: List[str]) -> None:
         for video_id in video_ids:
             self.mark_seen(video_id)
+
+    def failed_entry(self, video_id: str) -> Optional[Dict[str, object]]:
+        return self.data["failed_videos"].get(video_id)
+
+    def should_retry_failed_video(
+        self,
+        video_id: str,
+        retry_limit: int,
+        cooldown_hours: int,
+    ) -> bool:
+        entry = self.failed_entry(video_id)
+        if not entry:
+            return True
+
+        retry_count = int(entry.get("retry_count", 0))
+        if retry_count >= retry_limit:
+            return False
+
+        last_attempt_at = entry.get("last_attempt_at")
+        if not last_attempt_at:
+            return True
+
+        try:
+            last_attempt_dt = datetime.fromisoformat(str(last_attempt_at))
+        except ValueError:
+            return True
+        cooldown = timedelta(hours=cooldown_hours)
+        return datetime.now(timezone.utc) - last_attempt_dt >= cooldown
+
+    def mark_failed(self, video_id: str, reason: str) -> None:
+        existing = self.failed_entry(video_id) or {}
+        retry_count = int(existing.get("retry_count", 0)) + 1
+        self.data["failed_videos"][video_id] = {
+            "retry_count": retry_count,
+            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+            "last_error": reason,
+        }
+
+    def clear_failed(self, video_id: str) -> None:
+        self.data["failed_videos"].pop(video_id, None)
 
     def set_first_run_completed(self) -> None:
         self.data["first_run_completed"] = True
@@ -510,15 +560,17 @@ class TranscriptFetcher:
             "youtube_transcript_api", "youtube-transcript-api"
         )
         self.api = transcript_module.YouTubeTranscriptApi()
+        self.last_error: Optional[str] = None
 
     def fetch(
         self, video_id: str, preferred_languages: Optional[List[str]] = None
     ) -> Optional[Dict[str, str]]:
+        self.last_error = None
         languages = self._preferred_languages(preferred_languages)
         try:
             transcript = self.api.fetch(video_id, languages=languages)
-        except Exception:
-            transcript = self._fetch_any_transcript(video_id)
+        except Exception as exc:
+            transcript = self._fetch_any_transcript(video_id, exc)
             if transcript is None:
                 return None
 
@@ -530,6 +582,7 @@ class TranscriptFetcher:
                 parts.append(text)
 
         if not parts:
+            self.last_error = "Transcript fetch returned no text snippets."
             return None
         return {
             "text": " ".join(parts),
@@ -553,19 +606,37 @@ class TranscriptFetcher:
                 languages.append(fallback_language)
         return languages
 
-    def _fetch_any_transcript(self, video_id: str) -> Optional[List[Dict[str, str]]]:
+    def _fetch_any_transcript(self, video_id: str, original_error: Exception):
         try:
             transcript_list = self.api.list(video_id)
-        except Exception:
+        except Exception as fallback_error:
+            self.last_error = (
+                "Preferred-language fetch failed: {0}. "
+                "Fallback transcript listing also failed: {1}.".format(
+                    self._format_exception(original_error),
+                    self._format_exception(fallback_error),
+                )
+            )
             return None
 
+        fetch_errors: List[str] = []
         for transcript in transcript_list:
             try:
                 fetched = transcript.fetch()
-            except Exception:
+            except Exception as exc:
+                fetch_errors.append(self._format_exception(exc))
                 continue
             if fetched:
                 return fetched
+
+        details = " ".join(fetch_errors[:3]).strip()
+        self.last_error = (
+            "Preferred-language fetch failed: {0}. "
+            "Fallback transcript listing succeeded, but no transcript could be fetched.{1}".format(
+                self._format_exception(original_error),
+                " Errors: {0}".format(details) if details else "",
+            )
+        )
         return None
 
     def _normalize_transcript_items(self, transcript) -> List[Dict[str, str]]:
@@ -593,6 +664,12 @@ class TranscriptFetcher:
         if transcript_items:
             return transcript_items[0].get("language_code", "")
         return ""
+
+    def _format_exception(self, exc: Exception) -> str:
+        message = str(exc).strip()
+        if not message:
+            return exc.__class__.__name__
+        return "{0}: {1}".format(exc.__class__.__name__, message)
 
 
 class GeminiSummarizer:
@@ -864,10 +941,33 @@ class DigestApp:
         cutoff = datetime.now(timezone.utc) - timedelta(days=FIRST_RUN_LOOKBACK_DAYS)
         return published_dt >= cutoff
 
+    def _eligible_videos(self, videos: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        eligible: List[Dict[str, str]] = []
+        for video in videos:
+            video_id = video["video_id"]
+            if self.state.has_seen(video_id):
+                continue
+            if not self.state.should_retry_failed_video(
+                video_id,
+                self.config.failed_video_retry_limit,
+                self.config.failed_video_retry_cooldown_hours,
+            ):
+                failed_entry = self.state.failed_entry(video_id) or {}
+                print(
+                    "Skipping retry for video after repeated transcript failures: {0}\n"
+                    "Last error: {1}".format(
+                        video["title"],
+                        failed_entry.get("last_error", "Unknown transcript error."),
+                    )
+                )
+                continue
+            eligible.append(video)
+        return eligible
+
     def check_once(self, include_existing: bool = False) -> None:
         print("Checking for new videos...")
         videos = self.youtube.recent_uploads()
-        unseen = [video for video in videos if not self.state.has_seen(video["video_id"])]
+        unseen = self._eligible_videos(videos)
 
         if not self.state.data["first_run_completed"] and not include_existing:
             self.state.mark_many_seen([video["video_id"] for video in videos])
@@ -911,12 +1011,12 @@ class DigestApp:
                 video["video_id"], [video.get("original_language", "")]
             )
             if not transcript_data or not transcript_data.get("text"):
+                failure_reason = self.transcripts.last_error or "Unknown transcript error."
                 print(
-                    "Skipping video because no transcript is available: {0}".format(
-                        video["title"]
-                    )
+                    "Skipping video because transcript fetch failed: {0}\n"
+                    "Reason: {1}".format(video["title"], failure_reason)
                 )
-                self.state.mark_seen(video["video_id"])
+                self.state.mark_failed(video["video_id"], failure_reason)
                 self.state.save()
                 continue
             transcript_path = self._write_transcript(video, transcript_data)
@@ -948,7 +1048,11 @@ class DigestApp:
             video["video_id"], [video.get("original_language", "")]
         )
         if not transcript_data or not transcript_data.get("text"):
-            print("Skipping test run because no transcript is available for this video.")
+            failure_reason = self.transcripts.last_error or "Unknown transcript error."
+            print(
+                "Skipping test run because transcript fetch failed for this video.\n"
+                "Reason: {0}".format(failure_reason)
+            )
             return
         transcript_path = self._write_transcript(video, transcript_data, test_mode=True)
         print("Test transcript saved to {0}".format(transcript_path))
@@ -989,6 +1093,15 @@ def build_config(project_dir: Path) -> Config:
         token_path=data_dir / "google_token.json",
         credentials_path=project_dir / "credentials.json",
         watched_channels_path=project_dir / "watched_channels.txt",
+        failed_video_retry_limit=int(
+            os.getenv("FAILED_VIDEO_RETRY_LIMIT", str(FAILED_VIDEO_RETRY_LIMIT))
+        ),
+        failed_video_retry_cooldown_hours=int(
+            os.getenv(
+                "FAILED_VIDEO_RETRY_COOLDOWN_HOURS",
+                str(FAILED_VIDEO_RETRY_COOLDOWN_HOURS),
+            )
+        ),
     )
 
 

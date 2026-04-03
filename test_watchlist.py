@@ -19,6 +19,8 @@ def build_config(tmp_path: Path) -> Config:
         token_path=tmp_path / "google_token.json",
         credentials_path=tmp_path / "credentials.json",
         watched_channels_path=tmp_path / "watched_channels.txt",
+        failed_video_retry_limit=3,
+        failed_video_retry_cooldown_hours=24,
     )
 
 

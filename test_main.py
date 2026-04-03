@@ -57,6 +57,7 @@ class TranscriptFetcherTests(unittest.TestCase):
 
     def test_fetch_supports_current_instance_api_return_shape(self):
         fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
+        fetcher.last_error = None
 
         class FakeApi:
             @staticmethod
@@ -74,6 +75,27 @@ class TranscriptFetcherTests(unittest.TestCase):
         transcript = fetcher.fetch("video-456", ["fr"])
 
         self.assertEqual(transcript, {"text": "Bonjour le monde", "language_code": "fr"})
+
+    def test_fetch_stores_failure_reason_when_both_paths_fail(self):
+        fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
+        fetcher.last_error = None
+
+        class FakeApi:
+            @staticmethod
+            def fetch(video_id, languages):
+                raise RuntimeError("primary path failed")
+
+            @staticmethod
+            def list(video_id):
+                raise ValueError("listing failed")
+
+        fetcher.api = FakeApi()
+
+        transcript = fetcher.fetch("video-789", ["en"])
+
+        self.assertIsNone(transcript)
+        self.assertIn("primary path failed", fetcher.last_error)
+        self.assertIn("listing failed", fetcher.last_error)
 
 
 if __name__ == "__main__":
