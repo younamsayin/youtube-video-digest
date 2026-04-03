@@ -261,6 +261,17 @@ class NotificationClientTests(unittest.TestCase):
         self.assertNotIn("12345:secret-token", redacted)
         self.assertIn("[REDACTED_TELEGRAM_BOT_TOKEN]", redacted)
 
+    def test_markdown_to_telegram_html_formats_bold_and_headers(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+
+        formatted = notifier._markdown_to_telegram_html(
+            "# Title\n\n- **Important** move\nRegular **bold** text"
+        )
+
+        self.assertIn("<b>Title</b>", formatted)
+        self.assertIn("• <b>Important</b> move", formatted)
+        self.assertIn("Regular <b>bold</b> text", formatted)
+
 
 if __name__ == "__main__":
     unittest.main()

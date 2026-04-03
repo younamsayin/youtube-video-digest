@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import html
 import json
 import os
 import random
@@ -842,7 +843,7 @@ class NotificationClient:
             print("Telegram delivery skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set.")
             return
 
-        chunks = self._chunk_telegram_message(message)
+        chunks = self._chunk_telegram_message(self._markdown_to_telegram_html(message))
         print(
             "Sending Telegram message to chat {0} in {1} chunk(s)...".format(
                 self.telegram_chat_id, len(chunks)
@@ -855,6 +856,7 @@ class NotificationClient:
                     "chat_id": self.telegram_chat_id,
                     "text": chunk,
                     "disable_web_page_preview": "true",
+                    "parse_mode": "HTML",
                 }
             ).encode("utf-8")
             request = urllib.request.Request(
@@ -900,6 +902,43 @@ class NotificationClient:
         if remaining:
             chunks.append(remaining)
         return chunks
+
+    def _markdown_to_telegram_html(self, message: str) -> str:
+        lines = message.splitlines()
+        converted_lines: List[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("### "):
+                converted_lines.append("<b>{0}</b>".format(self._format_inline_markdown(stripped[4:])))
+                continue
+            if stripped.startswith("## "):
+                converted_lines.append("<b>{0}</b>".format(self._format_inline_markdown(stripped[3:])))
+                continue
+            if stripped.startswith("# "):
+                converted_lines.append("<b>{0}</b>".format(self._format_inline_markdown(stripped[2:])))
+                continue
+            if stripped.startswith("- "):
+                converted_lines.append("• {0}".format(self._format_inline_markdown(stripped[2:])))
+                continue
+            converted_lines.append(self._format_inline_markdown(line))
+
+        return "\n".join(converted_lines)
+
+    def _format_inline_markdown(self, text: str) -> str:
+        placeholders: List[str] = []
+
+        def replace_bold(match) -> str:
+            placeholders.append("<b>{0}</b>".format(html.escape(match.group(1))))
+            return "<<<BOLD_{0}>>>".format(len(placeholders) - 1)
+
+        protected = re.sub(r"\*\*(.+?)\*\*", replace_bold, text)
+        escaped = html.escape(protected)
+        for index, replacement in enumerate(placeholders):
+            escaped = escaped.replace(
+                html.escape("<<<BOLD_{0}>>>".format(index)), replacement
+            )
+        return escaped
 
     def _escape_osascript_string(self, value: str) -> str:
         return (
@@ -1047,17 +1086,14 @@ class DigestApp:
         }
 
     def _telegram_message(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> str:
-        mode_label = "test" if test_mode else "summary"
         return (
-            "YouTube {mode_label} ready\n\n"
-            "Title: {title}\n"
-            "Channel: {channel}\n"
-            "Published: {published_at}\n"
-            "Original language: {language}\n"
-            "URL: {url}\n\n"
+            "# {title}\n\n"
+            "- Channel: {channel}\n"
+            "- Published: {published_at}\n"
+            "- Original language: {language}\n"
+            "- URL: {url}\n\n"
             "{summary}"
         ).format(
-            mode_label=mode_label,
             title=video["title"],
             channel=video["channel_title"],
             published_at=video["published_at"],
