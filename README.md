@@ -56,6 +56,12 @@ Important variables:
 - `MAX_VIDEOS_PER_CHANNEL`: how many recent uploads to inspect per watched channel
 - `FAILED_VIDEO_RETRY_LIMIT`: defaults to `3`
 - `FAILED_VIDEO_RETRY_COOLDOWN_HOURS`: defaults to `24`
+- `TRANSCRIPT_REQUEST_DELAY_MIN_SECONDS`: defaults to `2`
+- `TRANSCRIPT_REQUEST_DELAY_MAX_SECONDS`: defaults to `6`
+- `TRANSCRIPT_RATE_LIMIT_PAUSE_MIN_MINUTES`: defaults to `30`
+- `TRANSCRIPT_RATE_LIMIT_PAUSE_MAX_MINUTES`: defaults to `60`
+- `TRANSCRIPT_USER_AGENT`: browser-like user agent used for transcript requests
+- `TRANSCRIPT_COOKIE_HEADER`: optional raw `Cookie` header value to attach to transcript requests
 
 ### 4. Choose which channels to watch
 
@@ -155,5 +161,6 @@ Each prompt is saved as a markdown file named with the YouTube video ID. Test pr
 - The prompt template is stored in `prompt.md`, and the fully rendered prompt used for each summary is saved to `data/prompts/`.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If transcript fetching fails, the app tracks the video separately from successful summaries and retries it later based on the configured retry limit and cooldown.
+- Transcript fetching is intentionally serialized, uses randomized request delays, reuses cached transcript files, and pauses future transcript requests for 30-60 minutes when YouTube starts signaling blocking or rate limiting.
 - Desktop notifications currently use macOS Notification Center.
 - If both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, completed summaries are also sent to Telegram.

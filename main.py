@@ -19,6 +19,15 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 FIRST_RUN_LOOKBACK_DAYS = 7
 FAILED_VIDEO_RETRY_LIMIT = 3
 FAILED_VIDEO_RETRY_COOLDOWN_HOURS = 24
+TRANSCRIPT_REQUEST_DELAY_MIN_SECONDS = 2.0
+TRANSCRIPT_REQUEST_DELAY_MAX_SECONDS = 6.0
+TRANSCRIPT_RATE_LIMIT_PAUSE_MIN_MINUTES = 30
+TRANSCRIPT_RATE_LIMIT_PAUSE_MAX_MINUTES = 60
+DEFAULT_TRANSCRIPT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 def load_dotenv(project_dir: Path) -> None:
@@ -65,6 +74,12 @@ class Config:
     prompt_template_path: Path
     failed_video_retry_limit: int
     failed_video_retry_cooldown_hours: int
+    transcript_request_delay_min_seconds: float
+    transcript_request_delay_max_seconds: float
+    transcript_rate_limit_pause_min_minutes: int
+    transcript_rate_limit_pause_max_minutes: int
+    transcript_user_agent: str
+    transcript_cookie_header: str
 
 
 class StateStore:
@@ -79,11 +94,13 @@ class StateStore:
                 "failed_videos": {},
                 "first_run_completed": False,
                 "last_checked_at": None,
+                "transcript_fetch_pause_until": None,
             }
         self.data.setdefault("seen_video_ids", [])
         self.data.setdefault("failed_videos", {})
         self.data.setdefault("first_run_completed", False)
         self.data.setdefault("last_checked_at", None)
+        self.data.setdefault("transcript_fetch_pause_until", None)
 
     def has_seen(self, video_id: str) -> bool:
         return video_id in self.data["seen_video_ids"]
@@ -136,6 +153,25 @@ class StateStore:
 
     def clear_failed(self, video_id: str) -> None:
         self.data["failed_videos"].pop(video_id, None)
+
+    def transcript_fetch_pause_until(self) -> Optional[datetime]:
+        value = self.data.get("transcript_fetch_pause_until")
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+
+    def is_transcript_fetch_paused(self) -> bool:
+        pause_until = self.transcript_fetch_pause_until()
+        return pause_until is not None and datetime.now(timezone.utc) < pause_until
+
+    def set_transcript_fetch_pause(self, pause_until: datetime) -> None:
+        self.data["transcript_fetch_pause_until"] = pause_until.isoformat()
+
+    def clear_transcript_fetch_pause(self) -> None:
+        self.data["transcript_fetch_pause_until"] = None
 
     def set_first_run_completed(self) -> None:
         self.data["first_run_completed"] = True
@@ -557,18 +593,49 @@ class YouTubeWatcher:
 
 
 class TranscriptFetcher:
-    def __init__(self):
+    def __init__(self, config: Config):
         transcript_module = require_package(
             "youtube_transcript_api", "youtube-transcript-api"
         )
-        self.api = transcript_module.YouTubeTranscriptApi()
+        requests_module = require_package("requests", "requests")
+        self.http_client = requests_module.Session()
+        self.http_client.headers.update(
+            {
+                "User-Agent": config.transcript_user_agent,
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        )
+        if config.transcript_cookie_header:
+            self.http_client.headers.update(
+                {"Cookie": config.transcript_cookie_header.strip()}
+            )
+        self.api = transcript_module.YouTubeTranscriptApi(http_client=self.http_client)
         self.last_error: Optional[str] = None
+        self.pause_until: Optional[datetime] = None
+        self.delay_min_seconds = min(
+            config.transcript_request_delay_min_seconds,
+            config.transcript_request_delay_max_seconds,
+        )
+        self.delay_max_seconds = max(
+            config.transcript_request_delay_min_seconds,
+            config.transcript_request_delay_max_seconds,
+        )
+        self.pause_min_minutes = min(
+            config.transcript_rate_limit_pause_min_minutes,
+            config.transcript_rate_limit_pause_max_minutes,
+        )
+        self.pause_max_minutes = max(
+            config.transcript_rate_limit_pause_min_minutes,
+            config.transcript_rate_limit_pause_max_minutes,
+        )
 
     def fetch(
         self, video_id: str, preferred_languages: Optional[List[str]] = None
     ) -> Optional[Dict[str, str]]:
         self.last_error = None
+        self.pause_until = None
         languages = self._preferred_languages(preferred_languages)
+        self._sleep_before_request()
         try:
             transcript = self.api.fetch(video_id, languages=languages)
         except Exception as exc:
@@ -609,9 +676,11 @@ class TranscriptFetcher:
         return languages
 
     def _fetch_any_transcript(self, video_id: str, original_error: Exception):
+        self._sleep_before_request()
         try:
             transcript_list = self.api.list(video_id)
         except Exception as fallback_error:
+            self._maybe_pause_on_rate_limit(original_error, fallback_error)
             self.last_error = (
                 "Preferred-language fetch failed: {0}. "
                 "Fallback transcript listing also failed: {1}.".format(
@@ -623,9 +692,11 @@ class TranscriptFetcher:
 
         fetch_errors: List[str] = []
         for transcript in transcript_list:
+            self._sleep_before_request()
             try:
                 fetched = transcript.fetch()
             except Exception as exc:
+                self._maybe_pause_on_rate_limit(exc)
                 fetch_errors.append(self._format_exception(exc))
                 continue
             if fetched:
@@ -672,6 +743,32 @@ class TranscriptFetcher:
         if not message:
             return exc.__class__.__name__
         return "{0}: {1}".format(exc.__class__.__name__, message)
+
+    def _sleep_before_request(self) -> None:
+        delay_seconds = random.uniform(self.delay_min_seconds, self.delay_max_seconds)
+        if delay_seconds <= 0:
+            return
+        time.sleep(delay_seconds)
+
+    def _maybe_pause_on_rate_limit(self, *exceptions: Exception) -> None:
+        for exc in exceptions:
+            if exc is None:
+                continue
+            message = str(exc)
+            class_name = exc.__class__.__name__
+            if (
+                "429" in message
+                or class_name in {"RequestBlocked", "IpBlocked"}
+                or "too many requests" in message.lower()
+                or "blocked" in message.lower()
+            ):
+                pause_minutes = random.randint(
+                    self.pause_min_minutes, self.pause_max_minutes
+                )
+                self.pause_until = datetime.now(timezone.utc) + timedelta(
+                    minutes=pause_minutes
+                )
+                return
 
 
 class GeminiSummarizer:
@@ -822,7 +919,7 @@ class DigestApp:
         self.config = config
         self.state = StateStore(config.state_path)
         self.youtube = YouTubeWatcher(config)
-        self.transcripts = TranscriptFetcher()
+        self.transcripts = TranscriptFetcher(config)
         self.summarizer = GeminiSummarizer(config)
         self.notifier = NotificationClient(config)
         self.config.summary_dir.mkdir(parents=True, exist_ok=True)
@@ -916,6 +1013,37 @@ class DigestApp:
         output_path.write_text(content)
         return output_path
 
+    def _read_cached_transcript(
+        self, video_id: str, test_mode: bool = False
+    ) -> Optional[Dict[str, str]]:
+        path = self._transcript_path(video_id, test_mode=test_mode)
+        if not path.exists():
+            return None
+
+        text = path.read_text()
+        if "Transcript unavailable." in text:
+            return None
+
+        sections = text.split("\n\n", 1)
+        if len(sections) != 2:
+            return None
+
+        header, transcript_body = sections
+        transcript_body = transcript_body.strip()
+        if not transcript_body:
+            return None
+
+        transcript_language = "unknown"
+        for line in header.splitlines():
+            if line.startswith("Transcript language:"):
+                transcript_language = line.split(":", 1)[1].strip() or "unknown"
+                break
+
+        return {
+            "text": transcript_body,
+            "language_code": transcript_language,
+        }
+
     def _telegram_message(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> str:
         mode_label = "test" if test_mode else "summary"
         return (
@@ -970,6 +1098,19 @@ class DigestApp:
             eligible.append(video)
         return eligible
 
+    def _handle_transcript_pause(self) -> bool:
+        if self.transcripts.pause_until is None:
+            return False
+
+        self.state.set_transcript_fetch_pause(self.transcripts.pause_until)
+        self.state.save()
+        print(
+            "Pausing transcript fetches until {0} after a rate-limit/blocking signal.".format(
+                self.transcripts.pause_until.isoformat()
+            )
+        )
+        return True
+
     def check_once(self, include_existing: bool = False) -> None:
         print("Checking for new videos...")
         videos = self.youtube.recent_uploads()
@@ -1011,11 +1152,29 @@ class DigestApp:
             print("No new videos found.")
             return
 
+        if self.state.is_transcript_fetch_paused():
+            pause_until = self.state.transcript_fetch_pause_until()
+            print(
+                "Transcript fetches are paused until {0}. Skipping this run.".format(
+                    pause_until.isoformat() if pause_until else "an unknown time"
+                )
+            )
+            return
+        self.state.clear_transcript_fetch_pause()
+
         for video in unseen:
             print("Summarizing: {0} ({1})".format(video["title"], video["url"]))
-            transcript_data = self.transcripts.fetch(
-                video["video_id"], [video.get("original_language", "")]
-            )
+            transcript_data = self._read_cached_transcript(video["video_id"])
+            if transcript_data:
+                print(
+                    "Using cached transcript for video: {0}".format(video["title"])
+                )
+            else:
+                transcript_data = self.transcripts.fetch(
+                    video["video_id"], [video.get("original_language", "")]
+                )
+                if self._handle_transcript_pause():
+                    break
             if not transcript_data or not transcript_data.get("text"):
                 failure_reason = self.transcripts.last_error or "Unknown transcript error."
                 print(
@@ -1053,9 +1212,25 @@ class DigestApp:
                 video["title"], video["channel_title"]
             )
         )
-        transcript_data = self.transcripts.fetch(
-            video["video_id"], [video.get("original_language", "")]
-        )
+        if self.state.is_transcript_fetch_paused():
+            pause_until = self.state.transcript_fetch_pause_until()
+            print(
+                "Transcript fetches are paused until {0}. Skipping test run.".format(
+                    pause_until.isoformat() if pause_until else "an unknown time"
+                )
+            )
+            return
+
+        transcript_data = self._read_cached_transcript(video["video_id"], test_mode=True)
+        if transcript_data:
+            print("Using cached test transcript for video.")
+        else:
+            self.state.clear_transcript_fetch_pause()
+            transcript_data = self.transcripts.fetch(
+                video["video_id"], [video.get("original_language", "")]
+            )
+            if self._handle_transcript_pause():
+                return
         if not transcript_data or not transcript_data.get("text"):
             failure_reason = self.transcripts.last_error or "Unknown transcript error."
             print(
@@ -1116,6 +1291,34 @@ def build_config(project_dir: Path) -> Config:
                 str(FAILED_VIDEO_RETRY_COOLDOWN_HOURS),
             )
         ),
+        transcript_request_delay_min_seconds=float(
+            os.getenv(
+                "TRANSCRIPT_REQUEST_DELAY_MIN_SECONDS",
+                str(TRANSCRIPT_REQUEST_DELAY_MIN_SECONDS),
+            )
+        ),
+        transcript_request_delay_max_seconds=float(
+            os.getenv(
+                "TRANSCRIPT_REQUEST_DELAY_MAX_SECONDS",
+                str(TRANSCRIPT_REQUEST_DELAY_MAX_SECONDS),
+            )
+        ),
+        transcript_rate_limit_pause_min_minutes=int(
+            os.getenv(
+                "TRANSCRIPT_RATE_LIMIT_PAUSE_MIN_MINUTES",
+                str(TRANSCRIPT_RATE_LIMIT_PAUSE_MIN_MINUTES),
+            )
+        ),
+        transcript_rate_limit_pause_max_minutes=int(
+            os.getenv(
+                "TRANSCRIPT_RATE_LIMIT_PAUSE_MAX_MINUTES",
+                str(TRANSCRIPT_RATE_LIMIT_PAUSE_MAX_MINUTES),
+            )
+        ),
+        transcript_user_agent=os.getenv(
+            "TRANSCRIPT_USER_AGENT", DEFAULT_TRANSCRIPT_USER_AGENT
+        ),
+        transcript_cookie_header=os.getenv("TRANSCRIPT_COOKIE_HEADER", ""),
     )
 
 

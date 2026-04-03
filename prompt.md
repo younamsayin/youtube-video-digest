@@ -1,5 +1,6 @@
 [지침]
-1. 영상 transcript의 언어를 활용해서 작성할것 (transcript가 영문이면 서머리도 영문)
+1. Read the [활용 데이터] and write a summary to the YouTube video.
+2. Write the summary in the same language as the transcript
 1. 전문가의 시각에서 논리적이고 명확한 비즈니스/투자 리포트 톤으로 작성할 것.
 2. 핵심 키워드나 중요한 개념은 **볼드체**로 강조할 것.
 3. 요약 내용을 단순히 나열하지 말고, 맥락을 이해하기 쉽게 '구조적'으로 분류할 것.
@@ -18,12 +19,11 @@
 - 지시: 영상의 제목(예: “새로운 텐배거의 등장” 반도체 투자 '이렇게' 하세요)을 분석하여, 제목이 질문 형식이거나 '어떻게' 하라는 가이드를 제시하는 경우, 영상 전체의 내용을 바탕으로 그 제목에 대한 명확한 답변(결론)을 도출할 것.
 - 답변은 "영상 제목: [제목]"을 명시한 후, 3가지 내외의 핵심 행동 지침(Action Item)으로 정리하여 답변할 것.
 
+[활용 데이터]
 Video title: {title}
 Channel: {channel}
 URL: {url}
-
 Description:
 {description}
-
-Transcript or fallback content:
+Transcript:
 {transcript}

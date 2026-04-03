@@ -23,15 +23,25 @@ class FakeTranscript:
 
 
 class TranscriptFetcherTests(unittest.TestCase):
-    def test_preferred_languages_include_base_code_and_fallbacks(self):
+    def _make_fetcher(self):
         fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
+        fetcher.last_error = None
+        fetcher.pause_until = None
+        fetcher.delay_min_seconds = 0
+        fetcher.delay_max_seconds = 0
+        fetcher.pause_min_minutes = 30
+        fetcher.pause_max_minutes = 30
+        return fetcher
+
+    def test_preferred_languages_include_base_code_and_fallbacks(self):
+        fetcher = self._make_fetcher()
 
         languages = fetcher._preferred_languages(["pt-BR", "ko"])
 
         self.assertEqual(languages, ["pt-BR", "pt", "ko", "en"])
 
     def test_fetch_falls_back_to_any_available_transcript(self):
-        fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
+        fetcher = self._make_fetcher()
 
         class FakeApi:
             @staticmethod
@@ -58,8 +68,7 @@ class TranscriptFetcherTests(unittest.TestCase):
         self.assertEqual(transcript, {"text": "Hola mundo", "language_code": "es"})
 
     def test_fetch_supports_current_instance_api_return_shape(self):
-        fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
-        fetcher.last_error = None
+        fetcher = self._make_fetcher()
 
         class FakeApi:
             @staticmethod
@@ -79,8 +88,7 @@ class TranscriptFetcherTests(unittest.TestCase):
         self.assertEqual(transcript, {"text": "Bonjour le monde", "language_code": "fr"})
 
     def test_fetch_stores_failure_reason_when_both_paths_fail(self):
-        fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
-        fetcher.last_error = None
+        fetcher = self._make_fetcher()
 
         class FakeApi:
             @staticmethod
@@ -125,6 +133,12 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
                 prompt_template_path=prompt_template_path,
                 failed_video_retry_limit=3,
                 failed_video_retry_cooldown_hours=24,
+                transcript_request_delay_min_seconds=0,
+                transcript_request_delay_max_seconds=0,
+                transcript_rate_limit_pause_min_minutes=30,
+                transcript_rate_limit_pause_max_minutes=60,
+                transcript_user_agent="test-agent",
+                transcript_cookie_header="",
             )
             summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
             summarizer.prompt_template_path = config.prompt_template_path
@@ -144,6 +158,19 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
         self.assertIn("Title: Video title", prompt)
         self.assertIn("Language: ko", prompt)
         self.assertIn("Transcript body", prompt)
+
+    def test_rate_limit_signal_sets_pause_window(self):
+        fetcher = TranscriptFetcher.__new__(TranscriptFetcher)
+        fetcher.pause_until = None
+        fetcher.pause_min_minutes = 30
+        fetcher.pause_max_minutes = 30
+
+        class RequestBlocked(Exception):
+            pass
+
+        fetcher._maybe_pause_on_rate_limit(RequestBlocked("blocked by youtube"))
+
+        self.assertIsNotNone(fetcher.pause_until)
 
 
 if __name__ == "__main__":

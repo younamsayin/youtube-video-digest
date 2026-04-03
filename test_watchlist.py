@@ -23,6 +23,12 @@ def build_config(tmp_path: Path) -> Config:
         prompt_template_path=tmp_path / "prompt.md",
         failed_video_retry_limit=3,
         failed_video_retry_cooldown_hours=24,
+        transcript_request_delay_min_seconds=0,
+        transcript_request_delay_max_seconds=0,
+        transcript_rate_limit_pause_min_minutes=30,
+        transcript_rate_limit_pause_max_minutes=60,
+        transcript_user_agent="test-agent",
+        transcript_cookie_header="",
     )
 
 
