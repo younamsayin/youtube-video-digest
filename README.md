@@ -118,6 +118,12 @@ Each summary is saved as a markdown file named with the YouTube video ID.
 
 Test summaries are saved with a `-test.md` suffix and do not update the seen-video state.
 
+Fetched transcripts are also written to:
+
+`/Users/samuelnam/Desktop/code/youtube-video-digest/data/transcripts/`
+
+Each transcript is saved as a text file named with the YouTube video ID. Test transcripts use a `-test.txt` suffix.
+
 ## Notes
 
 - Transcript retrieval depends on whether subtitles are available for the video.

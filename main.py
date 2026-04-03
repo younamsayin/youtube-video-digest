@@ -53,6 +53,7 @@ class Config:
     check_interval_seconds: int
     max_videos_per_channel: int
     summary_dir: Path
+    transcript_dir: Path
     state_path: Path
     token_path: Path
     credentials_path: Path
@@ -490,12 +491,17 @@ class DigestApp:
         self.summarizer = GeminiSummarizer(config)
         self.notifier = NotificationClient(config)
         self.config.summary_dir.mkdir(parents=True, exist_ok=True)
+        self.config.transcript_dir.mkdir(parents=True, exist_ok=True)
 
     def _summary_path(self, video_id: str) -> Path:
         return self.config.summary_dir / "{0}.md".format(video_id)
 
     def _test_summary_path(self, video_id: str) -> Path:
         return self.config.summary_dir / "{0}-test.md".format(video_id)
+
+    def _transcript_path(self, video_id: str, test_mode: bool = False) -> Path:
+        suffix = "-test" if test_mode else ""
+        return self.config.transcript_dir / "{0}{1}.txt".format(video_id, suffix)
 
     def _write_summary(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> Path:
         output_path = (
@@ -518,6 +524,50 @@ class DigestApp:
             url=video["url"],
             summary=summary,
         )
+        output_path.write_text(content)
+        return output_path
+
+    def _write_transcript(
+        self,
+        video: Dict[str, str],
+        transcript_data: Optional[Dict[str, str]],
+        test_mode: bool = False,
+    ) -> Path:
+        output_path = self._transcript_path(video["video_id"], test_mode=test_mode)
+        if transcript_data and transcript_data.get("text"):
+            content = (
+                "Title: {title}\n"
+                "Channel: {channel}\n"
+                "Published: {published_at}\n"
+                "Original language: {language}\n"
+                "Transcript language: {transcript_language}\n"
+                "URL: {url}\n\n"
+                "{transcript}\n"
+            ).format(
+                title=video["title"],
+                channel=video["channel_title"],
+                published_at=video["published_at"],
+                language=video.get("original_language", "unknown") or "unknown",
+                transcript_language=transcript_data.get("language_code", "unknown")
+                or "unknown",
+                url=video["url"],
+                transcript=transcript_data["text"],
+            )
+        else:
+            content = (
+                "Title: {title}\n"
+                "Channel: {channel}\n"
+                "Published: {published_at}\n"
+                "Original language: {language}\n"
+                "URL: {url}\n\n"
+                "Transcript unavailable.\n"
+            ).format(
+                title=video["title"],
+                channel=video["channel_title"],
+                published_at=video["published_at"],
+                language=video.get("original_language", "unknown") or "unknown",
+                url=video["url"],
+            )
         output_path.write_text(content)
         return output_path
 
@@ -596,6 +646,8 @@ class DigestApp:
         for video in unseen:
             print("Summarizing: {0} ({1})".format(video["title"], video["url"]))
             transcript_data = self.transcripts.fetch(video["video_id"])
+            transcript_path = self._write_transcript(video, transcript_data)
+            print("Transcript saved to {0}".format(transcript_path))
             summary = self.summarizer.summarize(video, transcript_data)
             output_path = self._write_summary(video, summary)
             self.state.mark_seen(video["video_id"])
@@ -620,6 +672,8 @@ class DigestApp:
             )
         )
         transcript_data = self.transcripts.fetch(video["video_id"])
+        transcript_path = self._write_transcript(video, transcript_data, test_mode=True)
+        print("Test transcript saved to {0}".format(transcript_path))
         summary = self.summarizer.summarize(video, transcript_data)
         output_path = self._write_summary(video, summary, test_mode=True)
         self.notifier.send(
@@ -652,6 +706,7 @@ def build_config(project_dir: Path) -> Config:
         check_interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "3600")),
         max_videos_per_channel=int(os.getenv("MAX_VIDEOS_PER_CHANNEL", "3")),
         summary_dir=data_dir / "summaries",
+        transcript_dir=data_dir / "transcripts",
         state_path=data_dir / "state.json",
         token_path=data_dir / "google_token.json",
         credentials_path=project_dir / "credentials.json",
