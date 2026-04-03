@@ -6,6 +6,8 @@ import random
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +48,8 @@ def require_package(name: str, install_hint: str):
 class Config:
     gemini_api_key: str
     gemini_model: str
+    telegram_bot_token: str
+    telegram_chat_id: str
     check_interval_seconds: int
     max_videos_per_channel: int
     summary_dir: Path
@@ -393,7 +397,11 @@ class GeminiSummarizer:
 
 
 class NotificationClient:
-    def send(self, title: str, body: str) -> None:
+    def __init__(self, config: Config):
+        self.telegram_bot_token = config.telegram_bot_token
+        self.telegram_chat_id = config.telegram_chat_id
+
+    def send(self, title: str, body: str, full_message: Optional[str] = None) -> None:
         if sys.platform == "darwin":
             safe_title = title.replace('"', '\\"')
             safe_body = body.replace('"', '\\"')
@@ -410,6 +418,53 @@ class NotificationClient:
         else:
             print("[Notification] {0}: {1}".format(title, body))
 
+        telegram_message = full_message or "*{0}*\n\n{1}".format(title, body)
+        self._send_telegram(telegram_message)
+
+    def _send_telegram(self, message: str) -> None:
+        if not self.telegram_bot_token or not self.telegram_chat_id:
+            return
+
+        for chunk in self._chunk_telegram_message(message):
+            payload = urllib.parse.urlencode(
+                {
+                    "chat_id": self.telegram_chat_id,
+                    "text": chunk,
+                    "disable_web_page_preview": "true",
+                }
+            ).encode("utf-8")
+            request = urllib.request.Request(
+                "https://api.telegram.org/bot{0}/sendMessage".format(
+                    self.telegram_bot_token
+                ),
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    response.read()
+            except Exception as exc:
+                print("Telegram notification failed: {0}".format(exc), file=sys.stderr)
+                return
+
+    def _chunk_telegram_message(self, message: str) -> List[str]:
+        max_length = 4000
+        if len(message) <= max_length:
+            return [message]
+
+        chunks: List[str] = []
+        remaining = message
+        while len(remaining) > max_length:
+            split_at = remaining.rfind("\n", 0, max_length)
+            if split_at == -1 or split_at < max_length // 2:
+                split_at = max_length
+            chunks.append(remaining[:split_at].strip())
+            remaining = remaining[split_at:].strip()
+        if remaining:
+            chunks.append(remaining)
+        return chunks
+
 
 class DigestApp:
     def __init__(self, config: Config):
@@ -418,7 +473,7 @@ class DigestApp:
         self.youtube = YouTubeWatcher(config)
         self.transcripts = TranscriptFetcher()
         self.summarizer = GeminiSummarizer(config)
-        self.notifier = NotificationClient()
+        self.notifier = NotificationClient(config)
         self.config.summary_dir.mkdir(parents=True, exist_ok=True)
 
     def _summary_path(self, video_id: str) -> Path:
@@ -450,6 +505,26 @@ class DigestApp:
         )
         output_path.write_text(content)
         return output_path
+
+    def _telegram_message(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> str:
+        mode_label = "test" if test_mode else "summary"
+        return (
+            "YouTube {mode_label} ready\n\n"
+            "Title: {title}\n"
+            "Channel: {channel}\n"
+            "Published: {published_at}\n"
+            "Original language: {language}\n"
+            "URL: {url}\n\n"
+            "{summary}"
+        ).format(
+            mode_label=mode_label,
+            title=video["title"],
+            channel=video["channel_title"],
+            published_at=video["published_at"],
+            language=video.get("original_language", "unknown") or "unknown",
+            url=video["url"],
+            summary=summary,
+        )
 
     def _is_within_first_run_window(self, video: Dict[str, str]) -> bool:
         published_at = video.get("published_at", "")
@@ -513,6 +588,7 @@ class DigestApp:
             self.notifier.send(
                 "YouTube summary ready",
                 "{0} - saved to {1}".format(video["title"], output_path.name),
+                full_message=self._telegram_message(video, summary),
             )
 
         self.state.set_first_run_completed()
@@ -534,6 +610,7 @@ class DigestApp:
         self.notifier.send(
             "YouTube test summary ready",
             "{0} - saved to {1}".format(video["title"], output_path.name),
+            full_message=self._telegram_message(video, summary, test_mode=True),
         )
         print("Test summary saved to {0}".format(output_path))
 
@@ -555,6 +632,8 @@ def build_config(project_dir: Path) -> Config:
     return Config(
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         check_interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "3600")),
         max_videos_per_channel=int(os.getenv("MAX_VIDEOS_PER_CHANNEL", "3")),
         summary_dir=data_dir / "summaries",

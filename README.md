@@ -12,6 +12,7 @@ It is built for macOS and uses:
 - Google OAuth to access your own YouTube subscriptions
 - Gemini for summarization
 - `osascript` for desktop notifications
+- Telegram Bot API for chat delivery
 
 ## Setup
 
@@ -49,6 +50,8 @@ Important variables:
 
 - `GEMINI_API_KEY`: required
 - `GEMINI_MODEL`: defaults to `gemini-2.5-flash`
+- `TELEGRAM_BOT_TOKEN`: optional, enables Telegram delivery
+- `TELEGRAM_CHAT_ID`: optional, the target Telegram user/chat/channel id
 - `CHECK_INTERVAL_SECONDS`: defaults to `3600`
 - `MAX_VIDEOS_PER_CHANNEL`: how many recent uploads to inspect per subscribed channel
 
@@ -121,3 +124,4 @@ Test summaries are saved with a `-test.md` suffix and do not update the seen-vid
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If no transcript is available, the app falls back to the title and description.
 - Desktop notifications currently use macOS Notification Center.
+- If both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, completed summaries are also sent to Telegram.
