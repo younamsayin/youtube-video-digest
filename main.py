@@ -646,6 +646,15 @@ class DigestApp:
         for video in unseen:
             print("Summarizing: {0} ({1})".format(video["title"], video["url"]))
             transcript_data = self.transcripts.fetch(video["video_id"])
+            if not transcript_data or not transcript_data.get("text"):
+                print(
+                    "Skipping video because no transcript is available: {0}".format(
+                        video["title"]
+                    )
+                )
+                self.state.mark_seen(video["video_id"])
+                self.state.save()
+                continue
             transcript_path = self._write_transcript(video, transcript_data)
             print("Transcript saved to {0}".format(transcript_path))
             summary = self.summarizer.summarize(video, transcript_data)
@@ -672,6 +681,9 @@ class DigestApp:
             )
         )
         transcript_data = self.transcripts.fetch(video["video_id"])
+        if not transcript_data or not transcript_data.get("text"):
+            print("Skipping test run because no transcript is available for this video.")
+            return
         transcript_path = self._write_transcript(video, transcript_data, test_mode=True)
         print("Test transcript saved to {0}".format(transcript_path))
         summary = self.summarizer.summarize(video, transcript_data)

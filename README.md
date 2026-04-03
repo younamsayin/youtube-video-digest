@@ -128,6 +128,6 @@ Each transcript is saved as a text file named with the YouTube video ID. Test tr
 
 - Transcript retrieval depends on whether subtitles are available for the video.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
-- If no transcript is available, the app falls back to the title and description.
+- If no transcript is available, the app skips transcript saving, summary generation, and Telegram delivery for that video.
 - Desktop notifications currently use macOS Notification Center.
 - If both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, completed summaries are also sent to Telegram.
