@@ -28,12 +28,12 @@ In Google Cloud:
 
 Expected path:
 
-`/Users/samuelnam/Desktop/code/youtube-video-digest/credentials.json`
+`./credentials.json`
 
 ### 2. Install Python dependencies
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 pip3 install -r requirements.txt
 ```
 
@@ -42,7 +42,7 @@ pip3 install -r requirements.txt
 Copy `.env.example` to `.env` and add your Gemini API key.
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 cp .env.example .env
 ```
 
@@ -83,41 +83,41 @@ https://www.youtube.com/@OpenAI
 ### 5. Authorize YouTube access
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 python3 main.py authorize
 ```
 
 This opens a browser and stores a refreshable token at:
 
-`/Users/samuelnam/Desktop/code/youtube-video-digest/data/google_token.json`
+`./data/google_token.json`
 
 ## Usage
 
 Run one check:
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 python3 main.py run-once
 ```
 
 Run one check and summarize the current backlog too:
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 python3 main.py run-once --include-existing
 ```
 
 Run a test summary on one random watched channel:
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 python3 main.py test-run
 ```
 
 Run forever and check every hour:
 
 ```bash
-cd /Users/samuelnam/Desktop/code/youtube-video-digest
+cd /path/to/youtube-video-digest
 python3 main.py daemon
 ```
 
@@ -137,7 +137,7 @@ python3 main.py run-once --include-existing
 
 Summaries are written to:
 
-`/Users/samuelnam/Desktop/code/youtube-video-digest/data/summaries/`
+`./data/summaries/`
 
 Each summary is saved as a markdown file named with the YouTube video ID.
 
@@ -145,13 +145,13 @@ Test summaries are saved with a `-test.md` suffix and do not update the seen-vid
 
 Fetched transcripts are also written to:
 
-`/Users/samuelnam/Desktop/code/youtube-video-digest/data/transcripts/`
+`./data/transcripts/`
 
 Each transcript is saved as a text file named with the YouTube video ID. Test transcripts use a `-test.txt` suffix.
 
 Rendered Gemini prompts are written to:
 
-`/Users/samuelnam/Desktop/code/youtube-video-digest/data/prompts/`
+`./data/prompts/`
 
 Each prompt is saved as a markdown file named with the YouTube video ID. Test prompts use a `-test.md` suffix.
 
