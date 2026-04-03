@@ -57,10 +57,12 @@ class Config:
     max_videos_per_channel: int
     summary_dir: Path
     transcript_dir: Path
+    prompt_dir: Path
     state_path: Path
     token_path: Path
     credentials_path: Path
     watched_channels_path: Path
+    prompt_template_path: Path
     failed_video_retry_limit: int
     failed_video_retry_cooldown_hours: int
 
@@ -683,8 +685,23 @@ class GeminiSummarizer:
         genai_module = require_package("google.genai", "google-genai")
         self.client = genai_module.Client(api_key=config.gemini_api_key)
         self.model = config.gemini_model
+        self.prompt_template_path = config.prompt_template_path
+        self.prompt_template = self._load_prompt_template()
 
     def summarize(
+        self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
+    ) -> Dict[str, str]:
+        prompt = self.render_prompt(video, transcript_data)
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+        )
+        return {
+            "prompt": prompt,
+            "summary": (response.text or "").strip(),
+        }
+
+    def render_prompt(
         self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
     ) -> str:
         transcript_block = (
@@ -698,29 +715,7 @@ class GeminiSummarizer:
             or "unknown"
         )
 
-        prompt = (
-            "Summarize this YouTube video in the video's original language.\n"
-            "Prefer the language indicated by the metadata below. "
-            "If the metadata is missing or unclear, infer the language from the transcript, "
-            "title, and description, then write the summary in that language.\n"
-            "Your summary should be very logical and detailed. "
-            "Do not limit your response to a certain length; make it as long as it needs to be "
-            "to be detailed and well written.\n"
-            "If the video title is phrased as a question, explicitly answer that question based "
-            "on the content of the video.\n"
-            "Return markdown with these sections:\n"
-            "## TL;DR\n"
-            "## Key Points\n"
-            "## Detailed Summary\n"
-            "## Action Items\n"
-            "Write clearly, avoid fluff, and organize the explanation in a logical order.\n\n"
-            "Video title: {title}\n"
-            "Channel: {channel}\n"
-            "URL: {url}\n"
-            "Preferred original language code: {preferred_language}\n"
-            "Description:\n{description}\n\n"
-            "Transcript or fallback content:\n{transcript}\n"
-        ).format(
+        return self.prompt_template.format(
             title=video["title"],
             channel=video["channel_title"],
             url=video["url"],
@@ -729,11 +724,12 @@ class GeminiSummarizer:
             transcript=transcript_block,
         )
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return (response.text or "").strip()
+    def _load_prompt_template(self) -> str:
+        if not self.prompt_template_path.exists():
+            raise SystemExit(
+                "Missing prompt template at {0}.".format(self.prompt_template_path)
+            )
+        return self.prompt_template_path.read_text()
 
 
 class NotificationClient:
@@ -831,6 +827,7 @@ class DigestApp:
         self.notifier = NotificationClient(config)
         self.config.summary_dir.mkdir(parents=True, exist_ok=True)
         self.config.transcript_dir.mkdir(parents=True, exist_ok=True)
+        self.config.prompt_dir.mkdir(parents=True, exist_ok=True)
 
     def _summary_path(self, video_id: str) -> Path:
         return self.config.summary_dir / "{0}.md".format(video_id)
@@ -841,6 +838,15 @@ class DigestApp:
     def _transcript_path(self, video_id: str, test_mode: bool = False) -> Path:
         suffix = "-test" if test_mode else ""
         return self.config.transcript_dir / "{0}{1}.txt".format(video_id, suffix)
+
+    def _prompt_path(self, video_id: str, test_mode: bool = False) -> Path:
+        suffix = "-test" if test_mode else ""
+        return self.config.prompt_dir / "{0}{1}.md".format(video_id, suffix)
+
+    def _write_prompt(self, video: Dict[str, str], prompt: str, test_mode: bool = False) -> Path:
+        output_path = self._prompt_path(video["video_id"], test_mode=test_mode)
+        output_path.write_text(prompt)
+        return output_path
 
     def _write_summary(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> Path:
         output_path = (
@@ -1021,7 +1027,10 @@ class DigestApp:
                 continue
             transcript_path = self._write_transcript(video, transcript_data)
             print("Transcript saved to {0}".format(transcript_path))
-            summary = self.summarizer.summarize(video, transcript_data)
+            summary_result = self.summarizer.summarize(video, transcript_data)
+            prompt_path = self._write_prompt(video, summary_result["prompt"])
+            print("Prompt saved to {0}".format(prompt_path))
+            summary = summary_result["summary"]
             output_path = self._write_summary(video, summary)
             self.state.mark_seen(video["video_id"])
             self.state.save()
@@ -1056,7 +1065,10 @@ class DigestApp:
             return
         transcript_path = self._write_transcript(video, transcript_data, test_mode=True)
         print("Test transcript saved to {0}".format(transcript_path))
-        summary = self.summarizer.summarize(video, transcript_data)
+        summary_result = self.summarizer.summarize(video, transcript_data)
+        prompt_path = self._write_prompt(video, summary_result["prompt"], test_mode=True)
+        print("Test prompt saved to {0}".format(prompt_path))
+        summary = summary_result["summary"]
         output_path = self._write_summary(video, summary, test_mode=True)
         self.notifier.send(
             "YouTube test summary ready",
@@ -1089,10 +1101,12 @@ def build_config(project_dir: Path) -> Config:
         max_videos_per_channel=int(os.getenv("MAX_VIDEOS_PER_CHANNEL", "3")),
         summary_dir=data_dir / "summaries",
         transcript_dir=data_dir / "transcripts",
+        prompt_dir=data_dir / "prompts",
         state_path=data_dir / "state.json",
         token_path=data_dir / "google_token.json",
         credentials_path=project_dir / "credentials.json",
         watched_channels_path=project_dir / "watched_channels.txt",
+        prompt_template_path=project_dir / "prompt.md",
         failed_video_retry_limit=int(
             os.getenv("FAILED_VIDEO_RETRY_LIMIT", str(FAILED_VIDEO_RETRY_LIMIT))
         ),

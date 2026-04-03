@@ -143,9 +143,16 @@ Fetched transcripts are also written to:
 
 Each transcript is saved as a text file named with the YouTube video ID. Test transcripts use a `-test.txt` suffix.
 
+Rendered Gemini prompts are written to:
+
+`/Users/samuelnam/Desktop/code/youtube-video-digest/data/prompts/`
+
+Each prompt is saved as a markdown file named with the YouTube video ID. Test prompts use a `-test.md` suffix.
+
 ## Notes
 
 - Transcript retrieval depends on whether subtitles are available for the video.
+- The prompt template is stored in `prompt.md`, and the fully rendered prompt used for each summary is saved to `data/prompts/`.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If transcript fetching fails, the app tracks the video separately from successful summaries and retries it later based on the configured retry limit and cooldown.
 - Desktop notifications currently use macOS Notification Center.

@@ -15,10 +15,12 @@ def build_config(tmp_path: Path) -> Config:
         max_videos_per_channel=3,
         summary_dir=tmp_path / "summaries",
         transcript_dir=tmp_path / "transcripts",
+        prompt_dir=tmp_path / "prompts",
         state_path=tmp_path / "state.json",
         token_path=tmp_path / "google_token.json",
         credentials_path=tmp_path / "credentials.json",
         watched_channels_path=tmp_path / "watched_channels.txt",
+        prompt_template_path=tmp_path / "prompt.md",
         failed_video_retry_limit=3,
         failed_video_retry_cooldown_hours=24,
     )
