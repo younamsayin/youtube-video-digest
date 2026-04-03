@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -57,6 +58,7 @@ class Config:
     state_path: Path
     token_path: Path
     credentials_path: Path
+    watched_channels_path: Path
 
 
 class StateStore:
@@ -94,6 +96,8 @@ class StateStore:
 
 
 class YouTubeWatcher:
+    RETRYABLE_STATUS_CODES = {499, 500, 502, 503, 504}
+
     def __init__(self, config: Config):
         self.config = config
 
@@ -150,6 +154,31 @@ class YouTubeWatcher:
         creds = self._load_credentials()
         return google_discovery.build("youtube", "v3", credentials=creds)
 
+    def _execute_request(self, request, label: str):
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return request.execute()
+            except Exception as exc:
+                status_code = getattr(getattr(exc, "resp", None), "status", None)
+                details = str(exc)
+                is_retryable = (
+                    status_code in self.RETRYABLE_STATUS_CODES
+                    or "backendError" in details
+                    or "The operation was cancelled." in details
+                )
+                if not is_retryable or attempt == max_attempts:
+                    raise
+
+                delay_seconds = min(2 ** (attempt - 1), 8) + random.uniform(0, 0.5)
+                print(
+                    "{0} failed with a retryable error (attempt {1}/{2}): {3}. "
+                    "Retrying in {4:.1f}s...".format(
+                        label, attempt, max_attempts, details, delay_seconds
+                    )
+                )
+                time.sleep(delay_seconds)
+
     def subscribed_channel_ids(self) -> List[str]:
         youtube = self._service()
         channel_ids: List[str] = []
@@ -168,7 +197,10 @@ class YouTubeWatcher:
                     maxResults=50,
                     pageToken=page_token,
                 )
-                .execute()
+            )
+            response = self._execute_request(
+                response,
+                "Loading subscription page {0}".format(page_count),
             )
 
             for item in response.get("items", []):
@@ -190,22 +222,180 @@ class YouTubeWatcher:
         return channel_ids
 
     def recent_uploads(self) -> List[Dict[str, str]]:
-        youtube = self._service()
-        channel_ids = self.subscribed_channel_ids()
+        channel_ids = self.configured_channel_ids()
         return self.recent_uploads_for_channel_ids(channel_ids)
+
+    def configured_channel_ids(self) -> List[str]:
+        configured_channels = self._load_configured_channels()
+        if not configured_channels:
+            raise SystemExit(
+                "No channels are configured in {0}.\n"
+                "Add one YouTube channel URL per line, for example:\n"
+                "  https://www.youtube.com/@GoogleDevelopers".format(
+                    self.config.watched_channels_path
+                )
+            )
+
+        youtube = self._service()
+        channel_ids: List[str] = []
+        print(
+            "Resolving {0} configured channel(s) from {1}...".format(
+                len(configured_channels), self.config.watched_channels_path.name
+            )
+        )
+        for raw_channel in configured_channels:
+            channel = self.resolve_channel_reference(youtube, raw_channel)
+            channel_ids.append(channel["channel_id"])
+            print(
+                "Watching channel: {0} ({1})".format(
+                    channel["channel_title"], channel["channel_id"]
+                )
+            )
+        return channel_ids
+
+    def _load_configured_channels(self) -> List[str]:
+        if not self.config.watched_channels_path.exists():
+            return []
+
+        channels: List[str] = []
+        for raw_line in self.config.watched_channels_path.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            channels.append(line)
+        return channels
+
+    def resolve_channel_reference(self, youtube, reference: str) -> Dict[str, str]:
+        parsed_reference = self._parse_channel_reference(reference)
+        channel = self._lookup_channel(youtube, parsed_reference)
+        if channel is None:
+            raise SystemExit(
+                "Could not resolve channel reference: {0}\n"
+                "Use one of these formats in {1}:\n"
+                "  https://www.youtube.com/@handle\n"
+                "  https://www.youtube.com/channel/UC...\n"
+                "  https://www.youtube.com/user/legacyName".format(
+                    reference, self.config.watched_channels_path
+                )
+            )
+        return channel
+
+    def _lookup_channel(self, youtube, parsed_reference: Dict[str, str]) -> Optional[Dict[str, str]]:
+        lookup_methods = []
+        if parsed_reference["kind"] == "channel_id":
+            lookup_methods.append(
+                (
+                    "id",
+                    youtube.channels().list(
+                        part="id,snippet", id=parsed_reference["value"], maxResults=1
+                    ),
+                )
+            )
+        elif parsed_reference["kind"] == "handle":
+            lookup_methods.append(
+                (
+                    "forHandle",
+                    youtube.channels().list(
+                        part="id,snippet",
+                        forHandle=parsed_reference["value"],
+                        maxResults=1,
+                    ),
+                )
+            )
+        elif parsed_reference["kind"] == "username":
+            lookup_methods.append(
+                (
+                    "forUsername",
+                    youtube.channels().list(
+                        part="id,snippet",
+                        forUsername=parsed_reference["value"],
+                        maxResults=1,
+                    ),
+                )
+            )
+
+        for parameter_name, request in lookup_methods:
+            response = self._execute_request(
+                request,
+                "Resolving channel with {0}={1}".format(
+                    parameter_name, parsed_reference["value"]
+                ),
+            )
+            items = response.get("items", [])
+            if items:
+                item = items[0]
+                return {
+                    "channel_id": item.get("id", ""),
+                    "channel_title": item.get("snippet", {}).get("title", "Unknown channel"),
+                }
+        return None
+
+    def _parse_channel_reference(self, reference: str) -> Dict[str, str]:
+        candidate = reference.strip()
+        if not candidate:
+            raise SystemExit("Encountered an empty channel reference in the watchlist.")
+
+        if candidate.startswith("@"):
+            return {"kind": "handle", "value": candidate}
+
+        if candidate.startswith("UC") and len(candidate) >= 24:
+            return {"kind": "channel_id", "value": candidate}
+
+        parsed = urllib.parse.urlparse(candidate)
+        if not parsed.scheme and not parsed.netloc:
+            raise SystemExit(
+                "Unsupported channel reference: {0}\n"
+                "Use a full YouTube channel URL, @handle, or channel ID.".format(
+                    reference
+                )
+            )
+
+        host = parsed.netloc.lower()
+        if host not in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+            raise SystemExit(
+                "Unsupported channel URL host: {0}\n"
+                "Use youtube.com channel URLs in {1}.".format(
+                    parsed.netloc or candidate, self.config.watched_channels_path
+                )
+            )
+
+        path = parsed.path.rstrip("/")
+        handle_match = re.match(r"^/@([^/]+)$", path)
+        if handle_match:
+            return {"kind": "handle", "value": "@" + handle_match.group(1)}
+
+        channel_match = re.match(r"^/channel/([^/]+)$", path)
+        if channel_match:
+            return {"kind": "channel_id", "value": channel_match.group(1)}
+
+        username_match = re.match(r"^/user/([^/]+)$", path)
+        if username_match:
+            return {"kind": "username", "value": username_match.group(1)}
+
+        raise SystemExit(
+            "Unsupported channel URL format: {0}\n"
+            "Use an @handle URL, /channel/ URL, or /user/ URL in {1}.".format(
+                reference, self.config.watched_channels_path
+            )
+        )
 
     def recent_uploads_for_channel_ids(self, channel_ids: List[str]) -> List[Dict[str, str]]:
         youtube = self._service()
         uploads_playlists: Dict[str, Dict[str, str]] = {}
 
-        print("Looking up upload playlists for subscribed channels...")
+        print("Looking up upload playlists for watched channels...")
 
         for index in range(0, len(channel_ids), 50):
             batch = channel_ids[index : index + 50]
-            response = (
+            request = (
                 youtube.channels()
                 .list(part="contentDetails,snippet", id=",".join(batch), maxResults=50)
-                .execute()
+            )
+            response = self._execute_request(
+                request,
+                "Looking up upload playlists for channels {0}-{1}".format(
+                    index + 1, index + len(batch)
+                ),
             )
             for item in response.get("items", []):
                 playlist_id = (
@@ -230,14 +420,17 @@ class YouTubeWatcher:
         total_playlists = len(playlist_items)
         print("Scanning recent uploads from {0} channels...".format(total_playlists))
         for position, (playlist_id, metadata) in enumerate(playlist_items, start=1):
-            response = (
+            request = (
                 youtube.playlistItems()
                 .list(
                     part="snippet,contentDetails",
                     playlistId=playlist_id,
                     maxResults=self.config.max_videos_per_channel,
                 )
-                .execute()
+            )
+            response = self._execute_request(
+                request,
+                "Scanning uploads for channel {0}/{1}".format(position, total_playlists),
             )
             for item in response.get("items", []):
                 video_id = item.get("contentDetails", {}).get("videoId")
@@ -269,10 +462,15 @@ class YouTubeWatcher:
             batch = video_ids[index : index + 50]
             if not batch:
                 continue
-            response = (
+            request = (
                 youtube.videos()
                 .list(part="snippet", id=",".join(batch), maxResults=50)
-                .execute()
+            )
+            response = self._execute_request(
+                request,
+                "Looking up video languages {0}-{1}".format(
+                    index + 1, index + len(batch)
+                ),
             )
             for item in response.get("items", []):
                 snippet = item.get("snippet", {})
@@ -294,12 +492,12 @@ class YouTubeWatcher:
         return videos
 
     def random_channel_recent_video(self) -> Dict[str, str]:
-        channel_ids = self.subscribed_channel_ids()
+        channel_ids = self.configured_channel_ids()
         if not channel_ids:
-            raise SystemExit("No subscribed channels were found for this account.")
+            raise SystemExit("No channels were configured for this account.")
 
         random_channel_id = random.choice(channel_ids)
-        print("Selected a random subscribed channel for test mode.")
+        print("Selected a random watched channel for test mode.")
         videos = self.recent_uploads_for_channel_ids([random_channel_id])
         if not videos:
             raise SystemExit("The selected channel does not have recent uploads to summarize.")
@@ -313,11 +511,16 @@ class TranscriptFetcher:
         )
         self.api = transcript_module.YouTubeTranscriptApi
 
-    def fetch(self, video_id: str) -> Optional[Dict[str, str]]:
+    def fetch(
+        self, video_id: str, preferred_languages: Optional[List[str]] = None
+    ) -> Optional[Dict[str, str]]:
+        languages = self._preferred_languages(preferred_languages)
         try:
-            transcript = self.api.get_transcript(video_id, languages=["en", "ko"])
+            transcript = self.api.get_transcript(video_id, languages=languages)
         except Exception:
-            return None
+            transcript = self._fetch_any_transcript(video_id)
+            if transcript is None:
+                return None
 
         parts = []
         for item in transcript:
@@ -331,6 +534,38 @@ class TranscriptFetcher:
             "text": " ".join(parts),
             "language_code": transcript[0].get("language_code", ""),
         }
+
+    def _preferred_languages(
+        self, preferred_languages: Optional[List[str]] = None
+    ) -> List[str]:
+        languages: List[str] = []
+        for language in preferred_languages or []:
+            normalized = (language or "").strip()
+            if normalized and normalized not in languages:
+                languages.append(normalized)
+                base_language = normalized.split("-", 1)[0]
+                if base_language and base_language not in languages:
+                    languages.append(base_language)
+
+        for fallback_language in ["en", "ko"]:
+            if fallback_language not in languages:
+                languages.append(fallback_language)
+        return languages
+
+    def _fetch_any_transcript(self, video_id: str) -> Optional[List[Dict[str, str]]]:
+        try:
+            transcript_list = self.api.list_transcripts(video_id)
+        except Exception:
+            return None
+
+        for transcript in transcript_list:
+            try:
+                fetched = transcript.fetch()
+            except Exception:
+                continue
+            if fetched:
+                return fetched
+        return None
 
 
 class GeminiSummarizer:
@@ -645,7 +880,9 @@ class DigestApp:
 
         for video in unseen:
             print("Summarizing: {0} ({1})".format(video["title"], video["url"]))
-            transcript_data = self.transcripts.fetch(video["video_id"])
+            transcript_data = self.transcripts.fetch(
+                video["video_id"], [video.get("original_language", "")]
+            )
             if not transcript_data or not transcript_data.get("text"):
                 print(
                     "Skipping video because no transcript is available: {0}".format(
@@ -673,14 +910,16 @@ class DigestApp:
         print("Processed {0} new videos.".format(len(unseen)))
 
     def test_run(self) -> None:
-        print("Running test mode with one random subscribed channel...")
+        print("Running test mode with one random watched channel...")
         video = self.youtube.random_channel_recent_video()
         print(
             "Summarizing test video: {0} from {1}".format(
                 video["title"], video["channel_title"]
             )
         )
-        transcript_data = self.transcripts.fetch(video["video_id"])
+        transcript_data = self.transcripts.fetch(
+            video["video_id"], [video.get("original_language", "")]
+        )
         if not transcript_data or not transcript_data.get("text"):
             print("Skipping test run because no transcript is available for this video.")
             return
@@ -722,12 +961,13 @@ def build_config(project_dir: Path) -> Config:
         state_path=data_dir / "state.json",
         token_path=data_dir / "google_token.json",
         credentials_path=project_dir / "credentials.json",
+        watched_channels_path=project_dir / "watched_channels.txt",
     )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Watch subscribed YouTube channels, summarize new videos, and notify when ready."
+        description="Watch selected YouTube channels, summarize new videos, and notify when ready."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -742,7 +982,7 @@ def parse_args() -> argparse.Namespace:
 
     subparsers.add_parser(
         "test-run",
-        help="Pick one random subscribed channel and summarize one recent video without updating seen state.",
+        help="Pick one random watched channel and summarize one recent video without updating seen state.",
     )
 
     subparsers.add_parser("daemon", help="Run forever and check every configured interval.")

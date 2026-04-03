@@ -1,0 +1,10 @@
+# Add one YouTube channel per line.
+# Supported formats:
+# https://www.youtube.com/@handle
+# https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx
+# https://www.youtube.com/user/legacyUsername
+
+
+https://www.youtube.com/@ant-stock
+https://www.youtube.com/@%EB%8F%88%EC%9D%B4%EA%B9%A1%ED%8C%A8%EB%8B%A4
+https://www.youtube.com/@%EC%84%9C%EB%8C%80%EB%A6%ACTV

@@ -2,14 +2,14 @@
 
 This program:
 
-1. Reads the YouTube channels you subscribe to.
+1. Reads the YouTube channels you list in `watched_channels.txt`.
 2. Finds newly uploaded videos.
 3. Summarizes each new video with Gemini.
 4. Sends a local notification when the summary is ready.
 
 It is built for macOS and uses:
 
-- Google OAuth to access your own YouTube subscriptions
+- Google OAuth to access YouTube Data API
 - Gemini for summarization
 - `osascript` for desktop notifications
 - Telegram Bot API for chat delivery
@@ -53,9 +53,26 @@ Important variables:
 - `TELEGRAM_BOT_TOKEN`: optional, enables Telegram delivery
 - `TELEGRAM_CHAT_ID`: optional, the target Telegram user/chat/channel id
 - `CHECK_INTERVAL_SECONDS`: defaults to `3600`
-- `MAX_VIDEOS_PER_CHANNEL`: how many recent uploads to inspect per subscribed channel
+- `MAX_VIDEOS_PER_CHANNEL`: how many recent uploads to inspect per watched channel
 
-### 4. Authorize YouTube access
+### 4. Choose which channels to watch
+
+Edit `watched_channels.txt` and add one YouTube channel per line.
+
+Supported formats:
+
+- `https://www.youtube.com/@handle`
+- `https://www.youtube.com/channel/UC...`
+- `https://www.youtube.com/user/legacyUsername`
+
+Example:
+
+```text
+https://www.youtube.com/@GoogleDevelopers
+https://www.youtube.com/@OpenAI
+```
+
+### 5. Authorize YouTube access
 
 ```bash
 cd /Users/samuelnam/Desktop/code/youtube-video-digest
@@ -82,7 +99,7 @@ cd /Users/samuelnam/Desktop/code/youtube-video-digest
 python3 main.py run-once --include-existing
 ```
 
-Run a test summary on one random subscribed channel:
+Run a test summary on one random watched channel:
 
 ```bash
 cd /Users/samuelnam/Desktop/code/youtube-video-digest
@@ -98,7 +115,7 @@ python3 main.py daemon
 
 ## First-run behavior
 
-On the first normal run, the program marks the current feed as already seen and only summarizes videos uploaded after that point. This avoids a flood of old summaries.
+On the first normal run, the program marks the current watched-channel feed as already seen and only summarizes videos uploaded after that point. This avoids a flood of old summaries.
 
 If you use `--include-existing` on the very first run, the app only considers videos uploaded in the last 7 days and skips older backlog items.
 
