@@ -14,6 +14,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-04-04 - Split Prompt Template Into Example And Local File
+- Commit: `unreleased`
+- Reason:
+  The tracked `prompt.md` file looked like a real runtime prompt, which made it too easy to commit personal prompt instructions back to Git instead of treating them as local configuration.
+- Logic:
+  Switched the repository convention to track `prompt.example.md` as the checked-in example, ignore local `prompt.md` in `.gitignore`, updated the runtime error message to instruct users to create `prompt.md` from the example, and updated the README setup steps to make that workflow explicit.
+
 ## 2026-04-04 - Fix Review Issues And Harden Notifications
 - Commit: `dcd414f`
 - Reason:

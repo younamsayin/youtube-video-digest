@@ -63,7 +63,20 @@ Important variables:
 - `TRANSCRIPT_USER_AGENT`: browser-like user agent used for transcript requests
 - `TRANSCRIPT_COOKIE_HEADER`: optional raw `Cookie` header value to attach to transcript requests
 
-### 4. Choose which channels to watch
+### 4. Create your local prompt file
+
+The repository ships with `prompt.example.md` as an example template only.
+
+Create your own local `prompt.md` from it:
+
+```bash
+cd /path/to/youtube-video-digest
+cp prompt.example.md prompt.md
+```
+
+Then edit `prompt.md` with the summary instructions you want to use.
+
+### 5. Choose which channels to watch
 
 Edit `watched_channels.txt` and add one YouTube channel per line.
 
@@ -80,7 +93,7 @@ https://www.youtube.com/@GoogleDevelopers
 https://www.youtube.com/@OpenAI
 ```
 
-### 5. Authorize YouTube access
+### 6. Authorize YouTube access
 
 ```bash
 cd /path/to/youtube-video-digest
@@ -158,7 +171,8 @@ Each prompt is saved as a markdown file named with the YouTube video ID. Test pr
 ## Notes
 
 - Transcript retrieval depends on whether subtitles are available for the video.
-- The prompt template is stored in `prompt.md`, and the fully rendered prompt used for each summary is saved to `data/prompts/`.
+- The repository tracks `prompt.example.md` as a sample only. Create your own local `prompt.md` from it before running the app.
+- The fully rendered prompt used for each summary is saved to `data/prompts/`.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If transcript fetching fails, the app tracks the video separately from successful summaries and retries it later based on the configured retry limit and cooldown.
 - Transcript fetching is intentionally serialized, uses randomized request delays, reuses cached transcript files, and pauses future transcript requests for 30-60 minutes when YouTube starts signaling blocking or rate limiting.

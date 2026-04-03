@@ -760,7 +760,7 @@ class GeminiSummarizer:
         )
         return {
             "prompt": prompt,
-            "summary": (response.text or "").strip(),
+            "summary": self._extract_text_response(response),
         }
 
     def render_prompt(
@@ -789,10 +789,27 @@ class GeminiSummarizer:
 
     def _load_prompt_template(self) -> str:
         if not self.prompt_template_path.exists():
+            example_path = self.prompt_template_path.with_name("prompt.example.md")
             raise SystemExit(
-                "Missing prompt template at {0}.".format(self.prompt_template_path)
+                "Missing prompt template at {0}.\n"
+                "Create a local prompt file by copying {1} to {0} and editing it for your needs.".format(
+                    self.prompt_template_path, example_path
+                )
             )
         return self.prompt_template_path.read_text()
+
+    def _extract_text_response(self, response) -> str:
+        text_parts: List[str] = []
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    text_parts.append(text)
+
+        if text_parts:
+            return "".join(text_parts).strip()
+        return (getattr(response, "text", "") or "").strip()
 
 
 class NotificationClient:

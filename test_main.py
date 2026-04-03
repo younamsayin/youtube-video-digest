@@ -209,6 +209,39 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
 
         self.assertIsNotNone(fetcher.pause_until)
 
+    def test_extract_text_response_ignores_non_text_parts(self):
+        summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+
+        class FakePart:
+            def __init__(self, text=None, thought_signature=None):
+                self.text = text
+                self.thought_signature = thought_signature
+
+        class FakeContent:
+            def __init__(self, parts):
+                self.parts = parts
+
+        class FakeCandidate:
+            def __init__(self, parts):
+                self.content = FakeContent(parts)
+
+        class FakeResponse:
+            def __init__(self):
+                self.candidates = [
+                    FakeCandidate(
+                        [
+                            FakePart(thought_signature=b"abc"),
+                            FakePart(text="Hello "),
+                            FakePart(text="world"),
+                        ]
+                    )
+                ]
+                self.text = "fallback warning-prone text"
+
+        extracted = summarizer._extract_text_response(FakeResponse())
+
+        self.assertEqual(extracted, "Hello world")
+
 
 class NotificationClientTests(unittest.TestCase):
     def test_escape_osascript_string_handles_newlines_and_backticks(self):

@@ -1,4 +1,5 @@
 .env
+prompt.md
 credentials.json
 data/
 __pycache__/
