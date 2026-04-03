@@ -14,6 +14,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-04-04 - Standardize Published Time Display To KST
+- Commit: `unreleased`
+- Reason:
+  Published timestamps were shown in raw YouTube UTC form in summaries, transcripts, Telegram messages, and failure alerts, which made the output inconsistent with the user's Korea-based workflow.
+- Logic:
+  Added a shared `DigestApp` formatter that converts user-facing `published_at` values from YouTube's ISO timestamp into `YYYY-MM-DD HH:MM:SS KST`, then routed summary files, transcript files, Telegram summary messages, and per-video failure alerts through that helper while keeping the raw UTC timestamp untouched for sorting and first-run window logic.
+
 ## 2026-04-04 - Refine Prompt Example Template
 - Commit: `unreleased`
 - Reason:

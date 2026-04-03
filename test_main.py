@@ -383,6 +383,13 @@ class NotificationClientTests(unittest.TestCase):
 
 
 class DigestAppFailureNotificationTests(unittest.TestCase):
+    def test_format_published_at_kst_converts_utc_to_kst(self):
+        app = DigestApp.__new__(DigestApp)
+
+        formatted = app._format_published_at_kst("2026-04-04T00:00:00Z")
+
+        self.assertEqual(formatted, "2026-04-04 09:00:00 KST")
+
     def test_notify_video_failure_sends_context_to_notifier(self):
         app = DigestApp.__new__(DigestApp)
 
@@ -409,6 +416,7 @@ class DigestAppFailureNotificationTests(unittest.TestCase):
         self.assertIn("Transcript fetch", app.notifier.calls[0]["body"])
         self.assertIn("Example video", app.notifier.calls[0]["full_message"])
         self.assertIn("No transcript found", app.notifier.calls[0]["full_message"])
+        self.assertIn("2026-04-04 09:00:00 KST", app.notifier.calls[0]["full_message"])
 
 
 if __name__ == "__main__":

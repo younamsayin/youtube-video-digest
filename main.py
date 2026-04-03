@@ -1018,6 +1018,16 @@ class DigestApp:
         output_path.write_text(prompt)
         return output_path
 
+    def _format_published_at_kst(self, published_at: str) -> str:
+        if not published_at:
+            return "unknown"
+        try:
+            published_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        except ValueError:
+            return published_at
+        kst = timezone(timedelta(hours=9))
+        return published_dt.astimezone(kst).strftime("%Y-%m-%d %H:%M:%S KST")
+
     def _write_summary(self, video: Dict[str, str], summary: str, test_mode: bool = False) -> Path:
         output_path = (
             self._test_summary_path(video["video_id"])
@@ -1034,7 +1044,7 @@ class DigestApp:
         ).format(
             title=video["title"],
             channel=video["channel_title"],
-            published_at=video["published_at"],
+            published_at=self._format_published_at_kst(video.get("published_at", "")),
             language=video.get("original_language", "unknown"),
             url=video["url"],
             summary=summary,
@@ -1061,7 +1071,9 @@ class DigestApp:
             ).format(
                 title=video["title"],
                 channel=video["channel_title"],
-                published_at=video["published_at"],
+                published_at=self._format_published_at_kst(
+                    video.get("published_at", "")
+                ),
                 language=video.get("original_language", "unknown") or "unknown",
                 transcript_language=transcript_data.get("language_code", "unknown")
                 or "unknown",
@@ -1079,7 +1091,9 @@ class DigestApp:
             ).format(
                 title=video["title"],
                 channel=video["channel_title"],
-                published_at=video["published_at"],
+                published_at=self._format_published_at_kst(
+                    video.get("published_at", "")
+                ),
                 language=video.get("original_language", "unknown") or "unknown",
                 url=video["url"],
             )
@@ -1128,7 +1142,7 @@ class DigestApp:
         ).format(
             title=video["title"],
             channel=video["channel_title"],
-            published_at=video["published_at"],
+            published_at=self._format_published_at_kst(video.get("published_at", "")),
             language=video.get("original_language", "unknown") or "unknown",
             url=video["url"],
             summary=summary,
@@ -1148,7 +1162,7 @@ class DigestApp:
             stage=stage,
             title=video["title"],
             channel=video["channel_title"],
-            published_at=video["published_at"],
+            published_at=self._format_published_at_kst(video.get("published_at", "")),
             url=video["url"],
             reason=reason,
         )
