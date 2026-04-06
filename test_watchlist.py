@@ -11,6 +11,7 @@ def build_config(tmp_path: Path) -> Config:
         gemini_model="gemini-2.5-flash",
         summary_language_mode="transcript",
         summary_language="",
+        enable_macos_notifications=True,
         telegram_bot_token="",
         telegram_chat_id="",
         check_interval_seconds=3600,

@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -121,6 +123,7 @@ class TranscriptFetcherTests(unittest.TestCase):
                 gemini_model="gemini-2.5-flash",
                 summary_language_mode="transcript",
                 summary_language="",
+                enable_macos_notifications=True,
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,
@@ -161,6 +164,7 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
                 gemini_model="gemini-test",
                 summary_language_mode="transcript",
                 summary_language="",
+                enable_macos_notifications=True,
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,
@@ -213,6 +217,7 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
                 gemini_model="gemini-test",
                 summary_language_mode="fixed",
                 summary_language="Korean",
+                enable_macos_notifications=True,
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,
@@ -262,6 +267,7 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
                 gemini_model="gemini-test",
                 summary_language_mode="transcript",
                 summary_language="",
+                enable_macos_notifications=True,
                 telegram_bot_token="",
                 telegram_chat_id="",
                 check_interval_seconds=3600,
@@ -353,6 +359,30 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
 
 
 class NotificationClientTests(unittest.TestCase):
+    def test_send_skips_macos_notification_when_disabled(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+        notifier.enable_macos_notifications = False
+        notifier.telegram_bot_token = ""
+        notifier.telegram_chat_id = ""
+
+        original_platform = sys.platform
+        original_run = subprocess.run
+        calls = []
+
+        def fake_run(*args, **kwargs):
+            calls.append((args, kwargs))
+            return None
+
+        try:
+            sys.platform = "darwin"
+            subprocess.run = fake_run
+            notifier.send("Title", "Body")
+        finally:
+            sys.platform = original_platform
+            subprocess.run = original_run
+
+        self.assertEqual(calls, [])
+
     def test_escape_osascript_string_handles_newlines_and_backticks(self):
         notifier = NotificationClient.__new__(NotificationClient)
         escaped = notifier._escape_osascript_string('hello\n"world"`test`')
@@ -382,41 +412,13 @@ class NotificationClientTests(unittest.TestCase):
         self.assertIn("Regular <b>bold</b> text", formatted)
 
 
-class DigestAppFailureNotificationTests(unittest.TestCase):
+class DigestAppFormattingTests(unittest.TestCase):
     def test_format_published_at_kst_converts_utc_to_kst(self):
         app = DigestApp.__new__(DigestApp)
 
         formatted = app._format_published_at_kst("2026-04-04T00:00:00Z")
 
         self.assertEqual(formatted, "2026-04-04 09:00:00 KST")
-
-    def test_notify_video_failure_sends_context_to_notifier(self):
-        app = DigestApp.__new__(DigestApp)
-
-        class FakeNotifier:
-            def __init__(self):
-                self.calls = []
-
-            def send(self, title, body, full_message=None):
-                self.calls.append(
-                    {"title": title, "body": body, "full_message": full_message}
-                )
-
-        app.notifier = FakeNotifier()
-        video = {
-            "title": "Example video",
-            "channel_title": "Example channel",
-            "published_at": "2026-04-04T00:00:00Z",
-            "url": "https://www.youtube.com/watch?v=abc123",
-        }
-
-        app._notify_video_failure(video, "Transcript fetch", "No transcript found")
-
-        self.assertEqual(app.notifier.calls[0]["title"], "YouTube video failed")
-        self.assertIn("Transcript fetch", app.notifier.calls[0]["body"])
-        self.assertIn("Example video", app.notifier.calls[0]["full_message"])
-        self.assertIn("No transcript found", app.notifier.calls[0]["full_message"])
-        self.assertIn("2026-04-04 09:00:00 KST", app.notifier.calls[0]["full_message"])
 
 
 if __name__ == "__main__":

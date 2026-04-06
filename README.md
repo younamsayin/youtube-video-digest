@@ -184,7 +184,7 @@ Each prompt is saved as a markdown file named with the YouTube video ID. Test pr
 - The fully rendered prompt used for each summary is saved to `data/prompts/`.
 - The app tries to summarize in the video's original language using YouTube metadata first, then falls back to inferring from the transcript, title, and description.
 - If transcript fetching fails, the app tracks the video separately from successful summaries and retries it later based on the configured retry limit and cooldown.
-- Transcript-fetch failures and summary-generation failures also send per-video Telegram alerts when Telegram delivery is configured.
+- Transcript-fetch failures and summary-generation failures are logged locally and shown in the console, but only successful summaries are sent to Telegram.
 - Transcript fetching is intentionally serialized, uses randomized request delays, reuses cached transcript files, and pauses future transcript requests for 30-60 minutes when YouTube starts signaling blocking or rate limiting.
-- Desktop notifications currently use macOS Notification Center.
+- Desktop notifications use macOS Notification Center only when `ENABLE_MACOS_NOTIFICATIONS=true`.
 - If both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, completed summaries are also sent to Telegram.

@@ -14,6 +14,20 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-04-06 - Add macOS Notification Toggle
+- Commit: `unreleased`
+- Reason:
+  Desktop Notification Center alerts were no longer wanted locally, but the app only had an all-or-nothing notifier path that always attempted macOS popups on Darwin.
+- Logic:
+  Added an `ENABLE_MACOS_NOTIFICATIONS` configuration flag, wired `NotificationClient` to skip `osascript` when that flag is disabled, documented the setting in `.env.example` and `README.md`, and left Telegram delivery behavior unchanged.
+
+## 2026-04-06 - Limit Telegram Notifications To Successful Summaries
+- Commit: `unreleased`
+- Reason:
+  Per-video failure alerts in Telegram created unnecessary noise when transcript fetches or summary generation failed, even though those failures were already visible in the console and local state tracking.
+- Logic:
+  Removed the per-video Telegram failure notification path from both normal runs and test runs, kept the existing console logging and failure-state tracking intact, updated the README to document that only successful summaries are sent to Telegram, and removed the now-unused failure notification test helper coverage.
+
 ## 2026-04-04 - Standardize Published Time Display To KST
 - Commit: `unreleased`
 - Reason:
