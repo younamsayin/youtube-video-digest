@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from main import Config, DigestApp, StateStore
+from main import Config, DigestApp, FAILURE_STAGE_SUMMARY_GENERATION, StateStore
 
 
 class StateStoreTests(unittest.TestCase):
@@ -13,11 +13,14 @@ class StateStoreTests(unittest.TestCase):
             state = StateStore(Path(tmp_dir) / "state.json")
 
             state.mark_failed("video-1", "first failure")
-            state.mark_failed("video-1", "second failure")
+            state.mark_failed(
+                "video-1", "second failure", FAILURE_STAGE_SUMMARY_GENERATION
+            )
 
             entry = state.failed_entry("video-1")
             self.assertEqual(entry["retry_count"], 2)
             self.assertEqual(entry["last_error"], "second failure")
+            self.assertEqual(entry["stage"], FAILURE_STAGE_SUMMARY_GENERATION)
 
     def test_mark_seen_clears_failed_state(self):
         with TemporaryDirectory() as tmp_dir:

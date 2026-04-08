@@ -31,6 +31,16 @@ DEFAULT_TRANSCRIPT_USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 CHANNEL_ID_PATTERN = re.compile(r"^UC[a-zA-Z0-9_-]{22}$")
+FAILURE_STAGE_TRANSCRIPT_FETCH = "transcript_fetch"
+FAILURE_STAGE_VIDEO_UNPLAYABLE = "video_unplayable"
+FAILURE_STAGE_SUMMARY_GENERATION = "summary_generation"
+FAILURE_STAGE_PROCESSING = "processing"
+FAILURE_STAGE_LABELS = {
+    FAILURE_STAGE_TRANSCRIPT_FETCH: "transcript fetch",
+    FAILURE_STAGE_VIDEO_UNPLAYABLE: "video unplayable",
+    FAILURE_STAGE_SUMMARY_GENERATION: "summary generation",
+    FAILURE_STAGE_PROCESSING: "processing",
+}
 
 
 def load_dotenv(project_dir: Path) -> None:
@@ -150,12 +160,18 @@ class StateStore:
         cooldown = timedelta(hours=cooldown_hours)
         return datetime.now(timezone.utc) - last_attempt_dt >= cooldown
 
-    def mark_failed(self, video_id: str, reason: str) -> None:
+    def mark_failed(
+        self,
+        video_id: str,
+        reason: str,
+        stage: str = FAILURE_STAGE_PROCESSING,
+    ) -> None:
         existing = self.failed_entry(video_id) or {}
         retry_count = int(existing.get("retry_count", 0)) + 1
         self.data["failed_videos"][video_id] = {
             "retry_count": retry_count,
             "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
             "last_error": reason,
         }
 
@@ -1161,6 +1177,16 @@ class DigestApp:
         cutoff = datetime.now(timezone.utc) - timedelta(days=FIRST_RUN_LOOKBACK_DAYS)
         return published_dt >= cutoff
 
+    def _failure_stage_from_reason(self, reason: str) -> str:
+        if "Summary generation failed" in reason:
+            return FAILURE_STAGE_SUMMARY_GENERATION
+        if "VideoUnplayable" in reason:
+            return FAILURE_STAGE_VIDEO_UNPLAYABLE
+        return FAILURE_STAGE_TRANSCRIPT_FETCH
+
+    def _failure_stage_label(self, stage: str) -> str:
+        return FAILURE_STAGE_LABELS.get(stage, stage.replace("_", " "))
+
     def _eligible_videos(self, videos: List[Dict[str, str]]) -> List[Dict[str, str]]:
         eligible: List[Dict[str, str]] = []
         for video in videos:
@@ -1173,11 +1199,20 @@ class DigestApp:
                 self.config.failed_video_retry_cooldown_hours,
             ):
                 failed_entry = self.state.failed_entry(video_id) or {}
+                failure_reason = str(
+                    failed_entry.get("last_error", "Unknown processing error.")
+                )
+                failure_stage = str(
+                    failed_entry.get(
+                        "stage", self._failure_stage_from_reason(failure_reason)
+                    )
+                )
                 print(
-                    "Skipping retry for video after repeated transcript failures: {0}\n"
-                    "Last error: {1}".format(
+                    "Skipping retry for video after repeated {0} failures: {1}\n"
+                    "Last error: {2}".format(
+                        self._failure_stage_label(failure_stage),
                         video["title"],
-                        failed_entry.get("last_error", "Unknown transcript error."),
+                        failure_reason,
                     )
                 )
                 continue
@@ -1267,11 +1302,14 @@ class DigestApp:
                     break
             if not transcript_data or not transcript_data.get("text"):
                 failure_reason = self.transcripts.last_error or "Unknown transcript error."
+                failure_stage = self._failure_stage_from_reason(failure_reason)
                 print(
                     "Skipping video because transcript fetch failed: {0}\n"
                     "Reason: {1}".format(video["title"], failure_reason)
                 )
-                self.state.mark_failed(video["video_id"], failure_reason)
+                self.state.mark_failed(
+                    video["video_id"], failure_reason, failure_stage
+                )
                 self.state.save()
                 continue
             transcript_path = self._write_transcript(video, transcript_data)
@@ -1284,7 +1322,11 @@ class DigestApp:
                     "Skipping video because summary generation failed: {0}\n"
                     "Reason: {1}".format(video["title"], failure_reason)
                 )
-                self.state.mark_failed(video["video_id"], failure_reason)
+                self.state.mark_failed(
+                    video["video_id"],
+                    failure_reason,
+                    FAILURE_STAGE_SUMMARY_GENERATION,
+                )
                 self.state.save()
                 continue
             prompt_path = self._write_prompt(video, summary_result["prompt"])

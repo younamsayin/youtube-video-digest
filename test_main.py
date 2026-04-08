@@ -420,6 +420,24 @@ class DigestAppFormattingTests(unittest.TestCase):
 
         self.assertEqual(formatted, "2026-04-04 09:00:00 KST")
 
+    def test_failure_stage_infers_summary_generation_from_existing_error(self):
+        app = DigestApp.__new__(DigestApp)
+
+        stage = app._failure_stage_from_reason(
+            "Summary generation failed: 503 UNAVAILABLE"
+        )
+
+        self.assertEqual(stage, "summary_generation")
+
+    def test_failure_stage_infers_video_unplayable_from_transcript_error(self):
+        app = DigestApp.__new__(DigestApp)
+
+        stage = app._failure_stage_from_reason(
+            "Preferred-language fetch failed: VideoUnplayable: live event"
+        )
+
+        self.assertEqual(stage, "video_unplayable")
+
 
 if __name__ == "__main__":
     unittest.main()

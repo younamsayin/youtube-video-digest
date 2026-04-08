@@ -14,6 +14,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-04-08 - Track Failed Video Stage
+- Commit: `unreleased`
+- Reason:
+  The retry skip log described every repeated failure as a transcript failure, even when the stored error was actually a Gemini summary-generation API failure or a future/unplayable live event.
+- Logic:
+  Added a `stage` field to failed video state entries, classified new failures as transcript fetch, video unplayable, or summary generation, inferred the stage for older failed entries that do not yet have the field, and changed retry skip logs to report the actual failure category instead of always saying transcript failure.
+
 ## 2026-04-06 - Add macOS Notification Toggle
 - Commit: `unreleased`
 - Reason:
