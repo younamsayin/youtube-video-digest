@@ -1,6 +1,8 @@
 import unittest
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from contextlib import redirect_stdout
 
 from main import Config, YouTubeWatcher
 
@@ -36,6 +38,32 @@ def build_config(tmp_path: Path) -> Config:
 
 
 class WatchlistTests(unittest.TestCase):
+    def test_configured_channel_ids_skips_invalid_entries_and_keeps_valid_ones(self):
+        watcher = YouTubeWatcher(build_config(Path(".")))
+
+        watcher._load_configured_channels = lambda: [
+            "https://www.youtube.com/@bad.handle.",
+            "https://www.youtube.com/@OpenAI",
+        ]
+        watcher._service = lambda: object()
+
+        def fake_resolve_channel_reference(youtube, reference):
+            if reference.endswith("."):
+                raise SystemExit(
+                    "Could not resolve channel reference: {0}".format(reference)
+                )
+            return {"channel_id": "UC1234567890123456789012", "channel_title": "OpenAI"}
+
+        watcher.resolve_channel_reference = fake_resolve_channel_reference
+
+        output = StringIO()
+        with redirect_stdout(output):
+            channel_ids = watcher.configured_channel_ids()
+
+        self.assertEqual(channel_ids, ["UC1234567890123456789012"])
+        self.assertIn("Skipping invalid channel reference in watchlist", output.getvalue())
+        self.assertIn("Watching channel: OpenAI", output.getvalue())
+
     def test_load_configured_channels_skips_comments_and_blanks(self):
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

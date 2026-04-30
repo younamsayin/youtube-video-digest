@@ -317,11 +317,24 @@ class YouTubeWatcher:
             )
         )
         for raw_channel in configured_channels:
-            channel = self.resolve_channel_reference(youtube, raw_channel)
+            try:
+                channel = self.resolve_channel_reference(youtube, raw_channel)
+            except SystemExit as exc:
+                print(
+                    "Skipping invalid channel reference in watchlist:\n{0}".format(exc)
+                )
+                continue
             channel_ids.append(channel["channel_id"])
             print(
                 "Watching channel: {0} ({1})".format(
                     channel["channel_title"], channel["channel_id"]
+                )
+            )
+        if not channel_ids:
+            raise SystemExit(
+                "None of the configured channel references in {0} could be resolved.\n"
+                "Fix the watchlist and try again.".format(
+                    self.config.watched_channels_path
                 )
             )
         return channel_ids

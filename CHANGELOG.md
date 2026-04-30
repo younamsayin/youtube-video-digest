@@ -14,6 +14,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-04-30 - Skip Invalid Watchlist Entries
+- Commit: `unreleased`
+- Reason:
+  A single malformed channel URL in `watched_channels.txt` could stop the entire daemon run, which was too brittle for a long-running watcher.
+- Logic:
+  Changed watchlist resolution to catch per-entry `SystemExit` errors, print the invalid channel message as a warning, continue resolving the remaining channels, and only fail the run if none of the configured entries resolve successfully. Added a regression test covering one invalid and one valid watchlist entry.
+
 ## 2026-04-08 - Track Failed Video Stage
 - Commit: `unreleased`
 - Reason:
