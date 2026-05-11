@@ -257,6 +257,59 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
 
         self.assertIn("Write the entire summary in Korean", prompt)
 
+    def test_render_prompt_prefers_transcript_language_over_zxx_metadata(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            prompt_template_path = tmp_path / "prompt.md"
+            prompt_template_path.write_text(
+                "Language: {preferred_language}\nTranscript:\n{transcript}\n"
+            )
+            config = Config(
+                gemini_api_key="fake-key",
+                gemini_model="gemini-test",
+                summary_language_mode="transcript",
+                summary_language="",
+                enable_macos_notifications=True,
+                telegram_bot_token="",
+                telegram_chat_id="",
+                check_interval_seconds=3600,
+                max_videos_per_channel=3,
+                summary_dir=tmp_path / "summaries",
+                transcript_dir=tmp_path / "transcripts",
+                prompt_dir=tmp_path / "prompts",
+                state_path=tmp_path / "state.json",
+                token_path=tmp_path / "google_token.json",
+                credentials_path=tmp_path / "credentials.json",
+                watched_channels_path=tmp_path / "watched_channels.txt",
+                prompt_template_path=prompt_template_path,
+                failed_video_retry_limit=3,
+                failed_video_retry_cooldown_hours=24,
+                transcript_request_delay_min_seconds=0,
+                transcript_request_delay_max_seconds=0,
+                transcript_rate_limit_pause_min_minutes=30,
+                transcript_rate_limit_pause_max_minutes=60,
+                transcript_user_agent="test-agent",
+                transcript_cookie_header="",
+            )
+            summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+            summarizer.config = config
+            summarizer.prompt_template_path = config.prompt_template_path
+            summarizer.prompt_template = summarizer._load_prompt_template()
+
+            prompt = summarizer.render_prompt(
+                {
+                    "title": "Video title",
+                    "channel_title": "Channel title",
+                    "url": "https://example.com/watch?v=123",
+                    "original_language": "zxx",
+                    "description": "A sample description",
+                },
+                {"text": "Transcript body", "language_code": "ko"},
+            )
+
+        self.assertIn("Language: ko", prompt)
+        self.assertIn("Transcript language code: ko", prompt)
+
     def test_init_stores_config_for_runtime_language_mode(self):
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

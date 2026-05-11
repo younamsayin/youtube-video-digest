@@ -806,11 +806,7 @@ class GeminiSummarizer:
             if transcript_data
             else "No transcript was available. Summarize from title and description only."
         )
-        preferred_language = (
-            video.get("original_language")
-            or (transcript_data or {}).get("language_code", "")
-            or "unknown"
-        )
+        preferred_language = self._preferred_summary_language(video, transcript_data)
 
         prompt_body = self.prompt_template.format(
             title=video["title"],
@@ -823,6 +819,27 @@ class GeminiSummarizer:
         return "{0}\n\n{1}".format(
             self._summary_language_instruction(preferred_language), prompt_body
         )
+
+    def _preferred_summary_language(
+        self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
+    ) -> str:
+        transcript_language = self._usable_language_code(
+            (transcript_data or {}).get("language_code", "")
+        )
+        if transcript_language:
+            return transcript_language
+
+        original_language = self._usable_language_code(video.get("original_language", ""))
+        if original_language:
+            return original_language
+
+        return "unknown"
+
+    def _usable_language_code(self, language_code: str) -> str:
+        normalized = (language_code or "").strip().lower()
+        if normalized in {"", "unknown", "und", "zxx"}:
+            return ""
+        return normalized
 
     def _load_prompt_template(self) -> str:
         if not self.prompt_template_path.exists():

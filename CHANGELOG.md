@@ -14,6 +14,13 @@ This file records project changes with enough detail to answer:
 - Logic:
   Concrete explanation of what code or behavior changed.
 
+## 2026-05-11 - Prefer Transcript Language Over Weak Video Metadata
+- Commit: `unreleased`
+- Reason:
+  Some summaries were generated in English even for Korean videos because YouTube metadata could provide weak values like `zxx`, and the prompt builder trusted that metadata ahead of the actual transcript language.
+- Logic:
+  Changed Gemini prompt rendering to prefer `transcript_data.language_code` whenever a transcript is available, normalized weak language codes like `zxx`, `und`, and `unknown` to be ignored, and added a regression test covering the exact `original_language=zxx` plus `transcript language=ko` case.
+
 ## 2026-04-30 - Skip Invalid Watchlist Entries
 - Commit: `unreleased`
 - Reason:
