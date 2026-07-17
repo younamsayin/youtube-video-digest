@@ -20,7 +20,11 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 FIRST_RUN_LOOKBACK_DAYS = 7
 FAILED_VIDEO_RETRY_LIMIT = 3
 FAILED_VIDEO_RETRY_COOLDOWN_HOURS = 24
-MAX_TRANSCRIPT_CHARS = 18000
+MAX_TRANSCRIPT_CHARS = 600000
+TRANSCRIPT_TRUNCATION_NOTICE = (
+    "\n\n[Transcript truncated here. The remainder of the video is not included. "
+    "Summarize only the content above and do not infer or invent anything beyond this point.]"
+)
 TRANSCRIPT_REQUEST_DELAY_MIN_SECONDS = 2.0
 TRANSCRIPT_REQUEST_DELAY_MAX_SECONDS = 6.0
 TRANSCRIPT_RATE_LIMIT_PAUSE_MIN_MINUTES = 30
@@ -800,9 +804,8 @@ class GeminiSummarizer:
     def render_prompt(
         self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
     ) -> str:
-        # Keep prompt size bounded so long transcripts do not overwhelm the model.
         transcript_block = (
-            transcript_data["text"][:MAX_TRANSCRIPT_CHARS]
+            self._bounded_transcript(transcript_data["text"])
             if transcript_data
             else "No transcript was available. Summarize from title and description only."
         )
@@ -819,6 +822,24 @@ class GeminiSummarizer:
         return "{0}\n\n{1}".format(
             self._summary_language_instruction(preferred_language), prompt_body
         )
+
+    def _bounded_transcript(self, text: str) -> str:
+        # Keep prompt size bounded so extreme transcripts do not overwhelm the model,
+        # but cut at a sentence boundary and tell the model the transcript is partial.
+        if len(text) <= MAX_TRANSCRIPT_CHARS:
+            return text
+
+        truncated = text[:MAX_TRANSCRIPT_CHARS]
+        boundary = max(
+            truncated.rfind(". "),
+            truncated.rfind("? "),
+            truncated.rfind("! "),
+            truncated.rfind("。"),
+            truncated.rfind("\n"),
+        )
+        if boundary > MAX_TRANSCRIPT_CHARS // 2:
+            truncated = truncated[: boundary + 1]
+        return truncated + TRANSCRIPT_TRUNCATION_NOTICE
 
     def _preferred_summary_language(
         self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]

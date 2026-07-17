@@ -377,6 +377,30 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
 
         self.assertIsNotNone(fetcher.pause_until)
 
+    def test_bounded_transcript_keeps_short_text_untouched(self):
+        summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+
+        text = "A short transcript."
+
+        self.assertEqual(summarizer._bounded_transcript(text), text)
+
+    def test_bounded_transcript_truncates_at_sentence_boundary_with_notice(self):
+        import main
+
+        summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+        sentence = "This is a sentence. "
+        text = sentence * (main.MAX_TRANSCRIPT_CHARS // len(sentence) + 10)
+
+        bounded = summarizer._bounded_transcript(text)
+
+        self.assertLessEqual(
+            len(bounded),
+            main.MAX_TRANSCRIPT_CHARS + len(main.TRANSCRIPT_TRUNCATION_NOTICE),
+        )
+        self.assertTrue(bounded.endswith(main.TRANSCRIPT_TRUNCATION_NOTICE))
+        body = bounded[: -len(main.TRANSCRIPT_TRUNCATION_NOTICE)]
+        self.assertTrue(body.endswith("."))
+
     def test_extract_text_response_ignores_non_text_parts(self):
         summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
 
