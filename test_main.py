@@ -678,6 +678,20 @@ class NotificationClientTests(unittest.TestCase):
         )
         self.assertIn("    ◦ nested detail", formatted)
 
+    def test_format_inline_markdown_restores_link_nested_inside_bold(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+
+        formatted = notifier._format_inline_markdown(
+            "1. **[03:12](https://youtube.com/watch?v=a&t=192s) 핵심 원칙**"
+        )
+
+        self.assertNotIn("FRAGMENT", formatted)
+        self.assertIn(
+            '<b><a href="https://youtube.com/watch?v=a&amp;t=192s">03:12</a>'
+            " 핵심 원칙</b>",
+            formatted,
+        )
+
     def test_chunk_telegram_message_never_splits_inside_bold_tags(self):
         notifier = NotificationClient.__new__(NotificationClient)
         long_message = "<b>" + "word " * 1500 + "</b>"

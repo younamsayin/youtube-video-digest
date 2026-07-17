@@ -1275,10 +1275,18 @@ class NotificationClient:
         )
         protected = re.sub(r"\*\*(.+?)\*\*", replace_bold, protected)
         escaped = html.escape(protected)
-        for index, replacement in enumerate(placeholders):
-            escaped = escaped.replace(
-                html.escape("<<<FRAGMENT_{0}>>>".format(index)), replacement
-            )
+        # Fragments can nest (e.g. a link inside **bold**), in which case a
+        # placeholder only becomes visible after its parent fragment is
+        # restored — keep sweeping until no placeholder remains. References
+        # only point at earlier fragments, so this always terminates.
+        replaced_any = True
+        while replaced_any:
+            replaced_any = False
+            for index, replacement in enumerate(placeholders):
+                token = html.escape("<<<FRAGMENT_{0}>>>".format(index))
+                if token in escaped:
+                    escaped = escaped.replace(token, replacement)
+                    replaced_any = True
         return escaped
 
     def _escape_osascript_string(self, value: str) -> str:
