@@ -121,6 +121,44 @@ class TranscriptFetcherTests(unittest.TestCase):
             "[00:00] Intro still intro [01:15] Second minute [1:02:05] Later",
         )
 
+    def test_fallback_prefers_manual_transcript_in_preferred_language(self):
+        fetcher = self._make_fetcher()
+        fetched_order = []
+
+        class RecordingTranscript:
+            def __init__(self, name, language_code, is_generated):
+                self.name = name
+                self.language_code = language_code
+                self.is_generated = is_generated
+
+            def fetch(self):
+                fetched_order.append(self.name)
+                return FakeFetchedTranscript(
+                    [{"text": self.name}], language_code=self.language_code
+                )
+
+        class FakeApi:
+            @staticmethod
+            def fetch(video_id, languages):
+                raise RuntimeError("preferred transcript unavailable")
+
+            @staticmethod
+            def list(video_id):
+                return iter(
+                    [
+                        RecordingTranscript("generated-ko", "ko", True),
+                        RecordingTranscript("manual-en", "en", False),
+                        RecordingTranscript("manual-ko", "ko", False),
+                    ]
+                )
+
+        fetcher.api = FakeApi()
+
+        transcript = fetcher.fetch("video-pref", ["ko"])
+
+        self.assertEqual(fetched_order, ["manual-ko"])
+        self.assertEqual(transcript["text"], "manual-ko")
+
     def test_fetch_stores_failure_reason_when_both_paths_fail(self):
         fetcher = self._make_fetcher()
 

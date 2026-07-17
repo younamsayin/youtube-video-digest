@@ -670,7 +670,7 @@ class TranscriptFetcher:
         try:
             transcript = self.api.fetch(video_id, languages=languages)
         except Exception as exc:
-            transcript = self._fetch_any_transcript(video_id, exc)
+            transcript = self._fetch_any_transcript(video_id, exc, languages)
             if transcript is None:
                 return None
 
@@ -717,7 +717,12 @@ class TranscriptFetcher:
                 languages.append(fallback_language)
         return languages
 
-    def _fetch_any_transcript(self, video_id: str, original_error: Exception):
+    def _fetch_any_transcript(
+        self,
+        video_id: str,
+        original_error: Exception,
+        preferred_languages: Optional[List[str]] = None,
+    ):
         self._sleep_before_request()
         try:
             transcript_list = self.api.list(video_id)
@@ -732,8 +737,17 @@ class TranscriptFetcher:
             )
             return None
 
+        # Manually-created captions are far cleaner input than auto-generated
+        # ones, so try them first, preferring the video's own language.
+        candidates = sorted(
+            transcript_list,
+            key=lambda transcript: self._transcript_priority(
+                transcript, preferred_languages or []
+            ),
+        )
+
         fetch_errors: List[str] = []
-        for transcript in transcript_list:
+        for transcript in candidates:
             self._sleep_before_request()
             try:
                 fetched = transcript.fetch()
@@ -753,6 +767,20 @@ class TranscriptFetcher:
             )
         )
         return None
+
+    def _transcript_priority(
+        self, transcript, preferred_languages: List[str]
+    ) -> tuple:
+        is_generated = 1 if getattr(transcript, "is_generated", False) else 0
+        language_code = (getattr(transcript, "language_code", "") or "").lower()
+        base_language = language_code.split("-", 1)[0]
+        language_rank = len(preferred_languages)
+        for index, preferred in enumerate(preferred_languages):
+            preferred_base = (preferred or "").lower().split("-", 1)[0]
+            if preferred_base and preferred_base == base_language:
+                language_rank = index
+                break
+        return (is_generated, language_rank)
 
     def _normalize_transcript_items(self, transcript) -> List[Dict[str, str]]:
         if hasattr(transcript, "to_raw_data"):
