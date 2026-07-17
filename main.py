@@ -616,6 +616,32 @@ class YouTubeWatcher:
         videos.sort(key=lambda item: item.get("published_at", ""), reverse=True)
         return videos
 
+    def video_details(self, video_id: str) -> Dict[str, str]:
+        youtube = self._service()
+        request = youtube.videos().list(part="snippet", id=video_id, maxResults=1)
+        response = self._execute_request(
+            request, "Looking up video {0}".format(video_id)
+        )
+        items = response.get("items", [])
+        if not items:
+            raise SystemExit(
+                "Video {0} was not found via the YouTube API.".format(video_id)
+            )
+        snippet = items[0].get("snippet", {})
+        language_code = snippet.get("defaultAudioLanguage") or snippet.get(
+            "defaultLanguage", ""
+        )
+        return {
+            "video_id": video_id,
+            "title": snippet.get("title", "Untitled video"),
+            "published_at": snippet.get("publishedAt", ""),
+            "description": snippet.get("description", ""),
+            "channel_title": snippet.get("channelTitle", "Unknown channel"),
+            "channel_id": snippet.get("channelId", ""),
+            "url": "https://www.youtube.com/watch?v={0}".format(video_id),
+            "original_language": language_code or "",
+        }
+
     def random_channel_recent_video(self) -> Dict[str, str]:
         channel_ids = self.configured_channel_ids()
         if not channel_ids:
@@ -1668,6 +1694,35 @@ class DigestApp:
         )
         print("Test summary saved to {0}".format(output_path))
 
+    def resummarize(self, video_id: str) -> None:
+        transcript_data = self._read_cached_transcript(video_id)
+        if transcript_data is None:
+            transcript_data = self._read_cached_transcript(video_id, test_mode=True)
+        if transcript_data is None:
+            raise SystemExit(
+                "No cached transcript found for video {0} in {1}.\n"
+                "Only videos with a saved transcript can be re-summarized.".format(
+                    video_id, self.config.transcript_dir
+                )
+            )
+
+        video = self.youtube.video_details(video_id)
+        print(
+            "Re-summarizing with the current prompt template: {0}".format(
+                video["title"]
+            )
+        )
+        summary_result = self.summarizer.summarize(video, transcript_data)
+        prompt_path = self._write_prompt(video, summary_result["prompt"], test_mode=True)
+        print("Prompt saved to {0}".format(prompt_path))
+        summary = link_video_timestamps(summary_result["summary"], video["url"])
+        output_path = self._write_summary(video, summary, test_mode=True)
+        print(
+            "Summary saved to {0}. Seen-state and notifications were not touched.".format(
+                output_path
+            )
+        )
+
     def daemon(self) -> None:
         while True:
             started_at = datetime.now(timezone.utc)
@@ -1798,6 +1853,18 @@ def parse_args() -> argparse.Namespace:
     )
 
     subparsers.add_parser("daemon", help="Run forever and check every configured interval.")
+
+    resummarize = subparsers.add_parser(
+        "resummarize",
+        help=(
+            "Re-summarize a video from its cached transcript using the current "
+            "prompt template, without updating seen-state or sending notifications."
+        ),
+    )
+    resummarize.add_argument(
+        "video_id",
+        help="YouTube video ID that has a cached transcript in data/transcripts.",
+    )
     return parser.parse_args()
 
 
@@ -1817,6 +1884,8 @@ def main() -> None:
         app.test_run()
     elif args.command == "daemon":
         app.daemon()
+    elif args.command == "resummarize":
+        app.resummarize(args.video_id)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,10 @@ Important variables:
 
 - `GEMINI_API_KEY`: required
 - `GEMINI_MODEL`: defaults to `gemini-2.5-flash`
+- `GEMINI_TEMPERATURE`: sampling temperature for summaries, defaults to `0.3`
+- `GEMINI_THINKING_BUDGET`: optional thinking-token budget; leave empty for the model default
+- `GEMINI_MODEL_LONG`: optional stronger model (e.g. `gemini-2.5-pro`) used for long transcripts; empty disables escalation
+- `GEMINI_MODEL_LONG_THRESHOLD_CHARS`: transcript length that triggers `GEMINI_MODEL_LONG`, defaults to `60000`
 - `SUMMARY_LANGUAGE_MODE`: defaults to `transcript`; use `fixed` to force one output language
 - `SUMMARY_LANGUAGE`: only used when `SUMMARY_LANGUAGE_MODE=fixed`
 - `TELEGRAM_BOT_TOKEN`: optional, enables Telegram delivery
@@ -141,6 +145,14 @@ Run forever and check every hour:
 ```bash
 cd /path/to/youtube-video-digest
 python3 main.py daemon
+```
+
+Re-summarize a video from its cached transcript (useful for comparing prompt
+changes; writes a `-test.md` summary and does not update seen-state or notify):
+
+```bash
+cd /path/to/youtube-video-digest
+python3 main.py resummarize VIDEO_ID
 ```
 
 ## First-run behavior
