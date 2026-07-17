@@ -35,6 +35,8 @@ DEFAULT_TRANSCRIPT_USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 TRANSCRIPT_TIMESTAMP_INTERVAL_SECONDS = 60
+SUMMARY_MIN_CHARS = 80
+SUMMARY_GENERATION_ATTEMPTS = 2
 CHANNEL_ID_PATTERN = re.compile(r"^UC[a-zA-Z0-9_-]{22}$")
 SUMMARY_TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]")
 FAILURE_STAGE_TRANSCRIPT_FETCH = "transcript_fetch"
@@ -131,6 +133,10 @@ class Config:
     transcript_rate_limit_pause_max_minutes: int
     transcript_user_agent: str
     transcript_cookie_header: str
+    gemini_temperature: float = 0.3
+    gemini_thinking_budget: Optional[int] = None
+    gemini_model_long: str = ""
+    gemini_model_long_threshold_chars: int = 60000
 
 
 class StateStore:
@@ -852,6 +858,7 @@ class GeminiSummarizer:
         self.config = config
         genai_module = require_package("google.genai", "google-genai")
         self.client = genai_module.Client(api_key=config.gemini_api_key)
+        self.genai_types = getattr(genai_module, "types", None)
         self.model = config.gemini_model
         self.prompt_template_path = config.prompt_template_path
         self.prompt_template = self._load_prompt_template()
@@ -859,15 +866,107 @@ class GeminiSummarizer:
     def summarize(
         self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
     ) -> Dict[str, str]:
-        prompt = self.render_prompt(video, transcript_data)
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
+        prompt_body = self.render_prompt(video, transcript_data)
+        preferred_language = self._preferred_summary_language(video, transcript_data)
+        system_instruction = self._system_instruction(preferred_language)
+        transcript_chars = len(transcript_data["text"]) if transcript_data else 0
+        model = self._select_model(transcript_chars)
+        prompt_record = "[System Instruction]\n{0}\n\n{1}".format(
+            system_instruction, prompt_body
         )
-        return {
-            "prompt": prompt,
-            "summary": self._extract_text_response(response),
+        expected_language = self._expected_language_for_validation(preferred_language)
+
+        last_issue = "unknown validation issue"
+        for attempt in range(1, SUMMARY_GENERATION_ATTEMPTS + 1):
+            response = self._generate(model, prompt_body, system_instruction)
+            summary = self._extract_text_response(response)
+            issue = self._summary_quality_issue(summary, expected_language)
+            if issue is None:
+                return {
+                    "prompt": prompt_record,
+                    "summary": summary,
+                }
+            last_issue = issue
+            print(
+                "Summary attempt {0}/{1} rejected: {2}".format(
+                    attempt, SUMMARY_GENERATION_ATTEMPTS, issue
+                )
+            )
+        raise RuntimeError(
+            "Summary failed validation after {0} attempt(s): {1}".format(
+                SUMMARY_GENERATION_ATTEMPTS, last_issue
+            )
+        )
+
+    def _generate(self, model: str, prompt_body: str, system_instruction: str):
+        if self.genai_types is None:
+            # Fall back to inlining the instruction when the installed
+            # google-genai package does not expose typed configs.
+            return self.client.models.generate_content(
+                model=model,
+                contents="{0}\n\n{1}".format(system_instruction, prompt_body),
+            )
+
+        config_kwargs = {
+            "system_instruction": system_instruction,
+            "temperature": self.config.gemini_temperature,
         }
+        if self.config.gemini_thinking_budget is not None:
+            config_kwargs["thinking_config"] = self.genai_types.ThinkingConfig(
+                thinking_budget=self.config.gemini_thinking_budget
+            )
+        return self.client.models.generate_content(
+            model=model,
+            contents=prompt_body,
+            config=self.genai_types.GenerateContentConfig(**config_kwargs),
+        )
+
+    def _select_model(self, transcript_chars: int) -> str:
+        if (
+            self.config.gemini_model_long
+            and transcript_chars >= self.config.gemini_model_long_threshold_chars
+        ):
+            return self.config.gemini_model_long
+        return self.model
+
+    def _system_instruction(self, preferred_language: str) -> str:
+        return (
+            "You are a YouTube video summarizer that produces structured, "
+            "detailed summaries from transcripts. Follow the user's "
+            "formatting instructions exactly.\n\n{0}"
+        ).format(self._summary_language_instruction(preferred_language))
+
+    def _expected_language_for_validation(self, preferred_language: str) -> Optional[str]:
+        mode = (self.config.summary_language_mode or "transcript").strip().lower()
+        if mode == "fixed":
+            fixed = (self.config.summary_language or "").strip().lower()
+            if fixed in {"korean", "ko", "한국어"}:
+                return "ko"
+            if fixed in {"english", "en"}:
+                return "en"
+            return None
+        base = (preferred_language or "").split("-", 1)[0]
+        return base if base in {"ko", "en"} else None
+
+    def _summary_quality_issue(
+        self, summary: str, expected_language: Optional[str]
+    ) -> Optional[str]:
+        if not summary:
+            return "the model returned an empty response"
+        if len(summary) < SUMMARY_MIN_CHARS:
+            return "the summary is suspiciously short ({0} chars)".format(len(summary))
+
+        if expected_language:
+            hangul = sum(1 for ch in summary if "가" <= ch <= "힣")
+            latin = sum(1 for ch in summary if ch.isascii() and ch.isalpha())
+            letters = hangul + latin
+            if letters >= 40:
+                hangul_ratio = hangul / letters
+                if expected_language == "ko" and hangul_ratio < 0.3:
+                    return "expected a Korean summary but got mostly non-Korean text"
+                if expected_language == "en" and hangul_ratio > 0.5:
+                    return "expected an English summary but got mostly Korean text"
+        return None
 
     def render_prompt(
         self, video: Dict[str, str], transcript_data: Optional[Dict[str, str]]
@@ -879,16 +978,13 @@ class GeminiSummarizer:
         )
         preferred_language = self._preferred_summary_language(video, transcript_data)
 
-        prompt_body = self.prompt_template.format(
+        return self.prompt_template.format(
             title=video["title"],
             channel=video["channel_title"],
             url=video["url"],
             preferred_language=preferred_language,
             description=video["description"] or "(empty)",
             transcript=transcript_block,
-        )
-        return "{0}\n\n{1}".format(
-            self._summary_language_instruction(preferred_language), prompt_body
         )
 
     def _bounded_transcript(self, text: str) -> str:
@@ -1618,6 +1714,16 @@ def build_config(project_dir: Path) -> Config:
             "TRANSCRIPT_USER_AGENT", DEFAULT_TRANSCRIPT_USER_AGENT
         ),
         transcript_cookie_header=os.getenv("TRANSCRIPT_COOKIE_HEADER", ""),
+        gemini_temperature=float(os.getenv("GEMINI_TEMPERATURE", "0.3")),
+        gemini_thinking_budget=(
+            int(os.getenv("GEMINI_THINKING_BUDGET", "").strip())
+            if os.getenv("GEMINI_THINKING_BUDGET", "").strip()
+            else None
+        ),
+        gemini_model_long=os.getenv("GEMINI_MODEL_LONG", ""),
+        gemini_model_long_threshold_chars=int(
+            os.getenv("GEMINI_MODEL_LONG_THRESHOLD_CHARS", "60000")
+        ),
     )
 
 

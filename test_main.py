@@ -268,7 +268,9 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
         self.assertIn("Title: Video title", prompt)
         self.assertIn("Language: ko", prompt)
         self.assertIn("Transcript body", prompt)
-        self.assertIn("Transcript language code: ko", prompt)
+        self.assertIn(
+            "Transcript language code: ko", summarizer._system_instruction("ko")
+        )
 
     def test_render_prompt_uses_fixed_summary_language_when_configured(self):
         with TemporaryDirectory() as tmp_dir:
@@ -318,7 +320,11 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
                 {"text": "Transcript body", "language_code": "en"},
             )
 
-        self.assertIn("Write the entire summary in Korean", prompt)
+        self.assertIn("Transcript body", prompt)
+        self.assertIn(
+            "Write the entire summary in Korean",
+            summarizer._system_instruction("en"),
+        )
 
     def test_render_prompt_prefers_transcript_language_over_zxx_metadata(self):
         with TemporaryDirectory() as tmp_dir:
@@ -371,7 +377,9 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
             )
 
         self.assertIn("Language: ko", prompt)
-        self.assertIn("Transcript language code: ko", prompt)
+        self.assertIn(
+            "Transcript language code: ko", summarizer._system_instruction("ko")
+        )
 
     def test_init_stores_config_for_runtime_language_mode(self):
         with TemporaryDirectory() as tmp_dir:
@@ -439,6 +447,111 @@ class GeminiSummarizerPromptTests(unittest.TestCase):
         fetcher._maybe_pause_on_rate_limit(RequestBlocked("blocked by youtube"))
 
         self.assertIsNotNone(fetcher.pause_until)
+
+    def _make_summarizer(self, **config_overrides):
+        defaults = dict(
+            gemini_api_key="fake-key",
+            gemini_model="gemini-test",
+            summary_language_mode="transcript",
+            summary_language="",
+            enable_macos_notifications=True,
+            telegram_bot_token="",
+            telegram_chat_id="",
+            check_interval_seconds=3600,
+            max_videos_per_channel=3,
+            summary_dir=Path(".") / "summaries",
+            transcript_dir=Path(".") / "transcripts",
+            prompt_dir=Path(".") / "prompts",
+            state_path=Path(".") / "state.json",
+            token_path=Path(".") / "google_token.json",
+            credentials_path=Path(".") / "credentials.json",
+            watched_channels_path=Path(".") / "watched_channels.txt",
+            prompt_template_path=Path(".") / "prompt.md",
+            failed_video_retry_limit=3,
+            failed_video_retry_cooldown_hours=24,
+            transcript_request_delay_min_seconds=0,
+            transcript_request_delay_max_seconds=0,
+            transcript_rate_limit_pause_min_minutes=30,
+            transcript_rate_limit_pause_max_minutes=60,
+            transcript_user_agent="test-agent",
+            transcript_cookie_header="",
+        )
+        defaults.update(config_overrides)
+        summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
+        summarizer.config = Config(**defaults)
+        return summarizer
+
+    def test_summary_quality_issue_rejects_empty_and_short_output(self):
+        summarizer = self._make_summarizer()
+
+        self.assertIsNotNone(summarizer._summary_quality_issue("", None))
+        self.assertIsNotNone(summarizer._summary_quality_issue("Too short.", None))
+        self.assertIsNone(summarizer._summary_quality_issue("A" * 200, None))
+
+    def test_summary_quality_issue_detects_language_mismatch(self):
+        summarizer = self._make_summarizer()
+        english_text = "This is a long English summary. " * 10
+        korean_text = "이것은 한국어로 작성된 요약입니다. " * 10
+
+        self.assertIsNotNone(summarizer._summary_quality_issue(english_text, "ko"))
+        self.assertIsNone(summarizer._summary_quality_issue(korean_text, "ko"))
+        self.assertIsNotNone(summarizer._summary_quality_issue(korean_text, "en"))
+        self.assertIsNone(summarizer._summary_quality_issue(english_text, "en"))
+
+    def test_expected_language_follows_fixed_mode_configuration(self):
+        summarizer = self._make_summarizer(
+            summary_language_mode="fixed", summary_language="Korean"
+        )
+
+        self.assertEqual(summarizer._expected_language_for_validation("en"), "ko")
+
+    def test_select_model_escalates_for_long_transcripts(self):
+        summarizer = self._make_summarizer(
+            gemini_model_long="gemini-test-pro",
+            gemini_model_long_threshold_chars=1000,
+        )
+        summarizer.model = "gemini-test"
+
+        self.assertEqual(summarizer._select_model(500), "gemini-test")
+        self.assertEqual(summarizer._select_model(5000), "gemini-test-pro")
+
+    def test_summarize_retries_once_then_raises_on_invalid_output(self):
+        summarizer = self._make_summarizer()
+        summarizer.model = "gemini-test"
+        summarizer.genai_types = None
+        summarizer.prompt_template = "Transcript:\n{transcript}\n"
+        summarizer.prompt_template_path = Path(".") / "prompt.md"
+        calls = []
+
+        class FakeModels:
+            @staticmethod
+            def generate_content(model, contents):
+                calls.append(model)
+
+                class FakeResponse:
+                    candidates = []
+                    text = ""
+
+                return FakeResponse()
+
+        class FakeClient:
+            models = FakeModels()
+
+        summarizer.client = FakeClient()
+
+        with self.assertRaises(RuntimeError):
+            summarizer.summarize(
+                {
+                    "title": "Video title",
+                    "channel_title": "Channel title",
+                    "url": "https://example.com/watch?v=123",
+                    "original_language": "en",
+                    "description": "",
+                },
+                {"text": "Transcript body", "language_code": "en"},
+            )
+
+        self.assertEqual(len(calls), 2)
 
     def test_bounded_transcript_keeps_short_text_untouched(self):
         summarizer = GeminiSummarizer.__new__(GeminiSummarizer)
