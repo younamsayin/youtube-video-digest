@@ -1161,12 +1161,39 @@ class NotificationClient:
         while len(remaining) > max_length:
             split_at = remaining.rfind("\n", 0, max_length)
             if split_at == -1 or split_at < max_length // 2:
-                split_at = max_length
-            chunks.append(remaining[:split_at].strip())
+                split_at = self._tag_safe_split_index(remaining, max_length)
+            chunk = remaining[:split_at].strip()
             remaining = remaining[split_at:].strip()
+            chunk, remaining = self._rebalance_html_tags(chunk, remaining)
+            if chunk:
+                chunks.append(chunk)
         if remaining:
             chunks.append(remaining)
         return chunks
+
+    def _tag_safe_split_index(self, text: str, limit: int) -> int:
+        # Telegram rejects payloads with broken HTML, so never split inside
+        # a tag or an entity when a chunk has to be cut mid-line.
+        split_at = limit
+        candidate = text[:split_at]
+        open_bracket = candidate.rfind("<")
+        if open_bracket > candidate.rfind(">"):
+            split_at = open_bracket
+        candidate = text[:split_at]
+        ampersand = candidate.rfind("&")
+        if ampersand > candidate.rfind(";") and split_at - ampersand < 10:
+            split_at = ampersand
+        return max(split_at, 1)
+
+    def _rebalance_html_tags(self, chunk: str, remaining: str) -> tuple:
+        for tag in ("a", "b"):
+            opens = len(re.findall(r"<{0}(?:\s[^>]*)?>".format(tag), chunk))
+            closes = chunk.count("</{0}>".format(tag))
+            if opens > closes:
+                chunk += "</{0}>".format(tag)
+                if tag == "b":
+                    remaining = "<b>" + remaining
+        return chunk, remaining
 
     def _markdown_to_telegram_html(self, message: str) -> str:
         lines = message.splitlines()
@@ -1183,8 +1210,17 @@ class NotificationClient:
             if stripped.startswith("# "):
                 converted_lines.append("<b>{0}</b>".format(self._format_inline_markdown(stripped[2:])))
                 continue
-            if stripped.startswith("- "):
-                converted_lines.append("• {0}".format(self._format_inline_markdown(stripped[2:])))
+            bullet_match = re.match(r"^(\s*)([-*])\s+(.*)$", line)
+            if bullet_match:
+                depth = len(bullet_match.group(1)) // 2
+                marker = "•" if depth == 0 else "◦"
+                converted_lines.append(
+                    "{0}{1} {2}".format(
+                        "    " * min(depth, 3),
+                        marker,
+                        self._format_inline_markdown(bullet_match.group(3)),
+                    )
+                )
                 continue
             converted_lines.append(self._format_inline_markdown(line))
 
@@ -1193,15 +1229,29 @@ class NotificationClient:
     def _format_inline_markdown(self, text: str) -> str:
         placeholders: List[str] = []
 
-        def replace_bold(match) -> str:
-            placeholders.append("<b>{0}</b>".format(html.escape(match.group(1))))
-            return "<<<BOLD_{0}>>>".format(len(placeholders) - 1)
+        def stash(fragment: str) -> str:
+            placeholders.append(fragment)
+            return "<<<FRAGMENT_{0}>>>".format(len(placeholders) - 1)
 
-        protected = re.sub(r"\*\*(.+?)\*\*", replace_bold, text)
+        def replace_link(match) -> str:
+            return stash(
+                '<a href="{0}">{1}</a>'.format(
+                    html.escape(match.group(2), quote=True),
+                    html.escape(match.group(1)),
+                )
+            )
+
+        def replace_bold(match) -> str:
+            return stash("<b>{0}</b>".format(html.escape(match.group(1))))
+
+        protected = re.sub(
+            r"\[([^\]]+)\]\((https?://[^\s)]+)\)", replace_link, text
+        )
+        protected = re.sub(r"\*\*(.+?)\*\*", replace_bold, protected)
         escaped = html.escape(protected)
         for index, replacement in enumerate(placeholders):
             escaped = escaped.replace(
-                html.escape("<<<BOLD_{0}>>>".format(index)), replacement
+                html.escape("<<<FRAGMENT_{0}>>>".format(index)), replacement
             )
         return escaped
 

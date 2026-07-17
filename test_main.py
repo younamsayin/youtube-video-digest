@@ -664,6 +664,32 @@ class NotificationClientTests(unittest.TestCase):
         self.assertIn("• <b>Important</b> move", formatted)
         self.assertIn("Regular <b>bold</b> text", formatted)
 
+    def test_markdown_to_telegram_html_formats_links_and_nested_bullets(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+
+        formatted = notifier._markdown_to_telegram_html(
+            "- [03:12](https://youtube.com/watch?v=a&t=192s) Intro\n"
+            "  - nested detail"
+        )
+
+        self.assertIn(
+            '<a href="https://youtube.com/watch?v=a&amp;t=192s">03:12</a>',
+            formatted,
+        )
+        self.assertIn("    ◦ nested detail", formatted)
+
+    def test_chunk_telegram_message_never_splits_inside_bold_tags(self):
+        notifier = NotificationClient.__new__(NotificationClient)
+        long_message = "<b>" + "word " * 1500 + "</b>"
+
+        chunks = notifier._chunk_telegram_message(long_message)
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            opens = chunk.count("<b>")
+            closes = chunk.count("</b>")
+            self.assertEqual(opens, closes)
+
 
 class TimestampLinkTests(unittest.TestCase):
     def test_link_video_timestamps_converts_markers_to_links(self):
