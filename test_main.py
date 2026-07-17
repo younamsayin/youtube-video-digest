@@ -96,6 +96,31 @@ class TranscriptFetcherTests(unittest.TestCase):
 
         self.assertEqual(transcript, {"text": "Bonjour le monde", "language_code": "fr"})
 
+    def test_fetch_interleaves_timestamp_markers_when_starts_available(self):
+        fetcher = self._make_fetcher()
+
+        class FakeApi:
+            @staticmethod
+            def fetch(video_id, languages):
+                return FakeFetchedTranscript(
+                    [
+                        {"text": "Intro", "start": 0.0},
+                        {"text": "still intro", "start": 30.0},
+                        {"text": "Second minute", "start": 75.5},
+                        {"text": "Later", "start": 3725.0},
+                    ],
+                    language_code="en",
+                )
+
+        fetcher.api = FakeApi()
+
+        transcript = fetcher.fetch("video-timed", ["en"])
+
+        self.assertEqual(
+            transcript["text"],
+            "[00:00] Intro still intro [01:15] Second minute [1:02:05] Later",
+        )
+
     def test_fetch_stores_failure_reason_when_both_paths_fail(self):
         fetcher = self._make_fetcher()
 
@@ -487,6 +512,33 @@ class NotificationClientTests(unittest.TestCase):
         self.assertIn("<b>Title</b>", formatted)
         self.assertIn("• <b>Important</b> move", formatted)
         self.assertIn("Regular <b>bold</b> text", formatted)
+
+
+class TimestampLinkTests(unittest.TestCase):
+    def test_link_video_timestamps_converts_markers_to_links(self):
+        from main import link_video_timestamps
+
+        summary = "1. [03:12] **Intro**\n2. [1:02:05] Closing thoughts"
+
+        linked = link_video_timestamps(
+            summary, "https://www.youtube.com/watch?v=abc123"
+        )
+
+        self.assertIn(
+            "[03:12](https://www.youtube.com/watch?v=abc123&t=192s)", linked
+        )
+        self.assertIn(
+            "[1:02:05](https://www.youtube.com/watch?v=abc123&t=3725s)", linked
+        )
+
+    def test_link_video_timestamps_leaves_plain_text_alone(self):
+        from main import link_video_timestamps
+
+        summary = "[Additional Task] No timestamps here."
+
+        self.assertEqual(
+            link_video_timestamps(summary, "https://youtu.be/abc123"), summary
+        )
 
 
 class DigestAppFormattingTests(unittest.TestCase):

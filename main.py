@@ -34,7 +34,9 @@ DEFAULT_TRANSCRIPT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
+TRANSCRIPT_TIMESTAMP_INTERVAL_SECONDS = 60
 CHANNEL_ID_PATTERN = re.compile(r"^UC[a-zA-Z0-9_-]{22}$")
+SUMMARY_TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]")
 FAILURE_STAGE_TRANSCRIPT_FETCH = "transcript_fetch"
 FAILURE_STAGE_VIDEO_UNPLAYABLE = "video_unplayable"
 FAILURE_STAGE_SUMMARY_GENERATION = "summary_generation"
@@ -45,6 +47,33 @@ FAILURE_STAGE_LABELS = {
     FAILURE_STAGE_SUMMARY_GENERATION: "summary generation",
     FAILURE_STAGE_PROCESSING: "processing",
 }
+
+
+def format_timestamp_marker(seconds: float) -> str:
+    total_seconds = max(int(seconds), 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return "[{0}:{1:02d}:{2:02d}]".format(hours, minutes, secs)
+    return "[{0:02d}:{1:02d}]".format(minutes, secs)
+
+
+def link_video_timestamps(summary: str, video_url: str) -> str:
+    separator = "&" if "?" in video_url else "?"
+
+    def replace(match) -> str:
+        if match.group(3) is not None:
+            seconds = (
+                int(match.group(1)) * 3600
+                + int(match.group(2)) * 60
+                + int(match.group(3))
+            )
+        else:
+            seconds = int(match.group(1)) * 60 + int(match.group(2))
+        label = match.group(0)[1:-1]
+        return "[{0}]({1}{2}t={3}s)".format(label, video_url, separator, seconds)
+
+    return SUMMARY_TIMESTAMP_PATTERN.sub(replace, summary)
 
 
 def load_dotenv(project_dir: Path) -> None:
@@ -647,10 +676,21 @@ class TranscriptFetcher:
 
         transcript_items = self._normalize_transcript_items(transcript)
         parts = []
+        next_marker_at: Optional[float] = None
         for item in transcript_items:
             text = item.get("text", "").strip()
-            if text:
-                parts.append(text)
+            if not text:
+                continue
+            # Interleave [MM:SS] markers so summaries can anchor sections to
+            # video positions. Items without start times (older caches, tests)
+            # produce plain text exactly as before.
+            start = item.get("start")
+            if start is not None:
+                start = float(start)
+                if next_marker_at is None or start >= next_marker_at:
+                    parts.append(format_timestamp_marker(start))
+                    next_marker_at = start + TRANSCRIPT_TIMESTAMP_INTERVAL_SECONDS
+            parts.append(text)
 
         if not parts:
             self.last_error = "Transcript fetch returned no text snippets."
@@ -1382,7 +1422,7 @@ class DigestApp:
                 continue
             prompt_path = self._write_prompt(video, summary_result["prompt"])
             print("Prompt saved to {0}".format(prompt_path))
-            summary = summary_result["summary"]
+            summary = link_video_timestamps(summary_result["summary"], video["url"])
             output_path = self._write_summary(video, summary)
             self.state.mark_seen(video["video_id"])
             self.state.save()
@@ -1445,7 +1485,7 @@ class DigestApp:
             return
         prompt_path = self._write_prompt(video, summary_result["prompt"], test_mode=True)
         print("Test prompt saved to {0}".format(prompt_path))
-        summary = summary_result["summary"]
+        summary = link_video_timestamps(summary_result["summary"], video["url"])
         output_path = self._write_summary(video, summary, test_mode=True)
         self.notifier.send(
             "YouTube test summary ready",
